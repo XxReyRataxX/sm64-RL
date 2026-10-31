@@ -13,5 +13,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Kill any previous instance so X11 focus is clean
+pkill -f "java LevelSelector" 2>/dev/null
+sleep 0.3
+
 echo "Launching selector..."
 java LevelSelector

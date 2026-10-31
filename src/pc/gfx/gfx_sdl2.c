@@ -272,9 +272,11 @@ static bool gfx_sdl_start_frame(void) {
     return true;
 }
 
+extern float gSpeedMultiplier;
+
 static void sync_framerate_with_timer(void) {
-    // Number of milliseconds a frame should take (30 fps)
-    const Uint32 FRAME_TIME = 1000 / 30;
+    // Base frame time for 30 fps, divided by speed multiplier
+    const Uint32 FRAME_TIME = (Uint32)(1000.0f / (30.0f * (gSpeedMultiplier > 0.0f ? gSpeedMultiplier : 1.0f)));
     static Uint32 last_time;
     Uint32 elapsed = SDL_GetTicks() - last_time;
 
@@ -284,7 +286,7 @@ static void sync_framerate_with_timer(void) {
 }
 
 static void gfx_sdl_swap_buffers_begin(void) {
-    if (!vsync_enabled) {
+    if (!vsync_enabled || gSpeedMultiplier > 1.0f) {
         sync_framerate_with_timer();
     }
 

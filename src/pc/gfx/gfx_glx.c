@@ -452,10 +452,14 @@ static bool gfx_glx_start_frame(void) {
     return true;
 }
 
+extern float gSpeedMultiplier;
+
 static void gfx_glx_swap_buffers_begin(void) {
-    glx.wanted_ust += FRAME_INTERVAL_US_NUMERATOR; // advance 1/30 seconds on JP/US or 1/25 seconds on EU
-    
-    if (!glx.has_oml_sync_control && !glx.has_sgi_video_sync) {
+    float spd = gSpeedMultiplier > 0.0f ? gSpeedMultiplier : 1.0f;
+    glx.wanted_ust += (uint64_t)(FRAME_INTERVAL_US_NUMERATOR / spd);
+
+    // When speed > 1 vsync intervals are too coarse; fall back to nanosleep
+    if (spd > 1.0f || (!glx.has_oml_sync_control && !glx.has_sgi_video_sync)) {
         glFlush();
         
         uint64_t target = glx.wanted_ust / FRAME_INTERVAL_US_DENOMINATOR;

@@ -16,7 +16,7 @@ public class GameLauncher {
     // Relative to the project root (one level up from java/)
     private static final String BINARY_PATH = "../build/us_pc/sm64.us";
 
-    public static void launch(String courseId) {
+    public static void launch(String courseId, double speed) {
         try {
             File binary = new File(
                 GameLauncher.class.getProtectionDomain()
@@ -38,7 +38,8 @@ public class GameLauncher {
 
             ProcessBuilder pb = new ProcessBuilder(
                 binary.getAbsolutePath(),
-                "--level", courseId
+                "--level", courseId,
+                "--speed", String.format("%.1f", speed)
             );
             pb.inheritIO();
             pb.start();
