@@ -23,10 +23,10 @@ public class LevelSelector extends JFrame {
     private static final Level[] LEVELS = {
         new Level("Bob-omb Battlefield", "Course 1",
                   "The very first course. Defeat King Bob-omb\nand collect the Power Stars!",
-                  new Color(100, 200, 100), "1"),
+                  new Color(100, 200, 100), "9"),
         new Level("Cool, Cool Mountain", "Course 4",
                   "A snowy mountain full of secrets.\nSlide down and rescue the baby penguin!",
-                  new Color(120, 180, 255), "4")
+                  new Color(120, 180, 255), "5")
     };
 
     public LevelSelector() {
