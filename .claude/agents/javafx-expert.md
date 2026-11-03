@@ -32,7 +32,7 @@ Never batch-ask more than 2 questions at once. Proceed only after confirmation.
 
 ### Token-Optimised Workflow
 Before writing repetitive scaffolding by hand, check whether a script in
-`claude_agent/scripts/` can do it:
+`.claude/scripts/` can do it:
 - **scaffold_javafx.sh** → Java class + CSS stub + JUnit test in one shot
 - **gen_fxml.sh** → minimal FXML file for a controller
 
@@ -53,7 +53,22 @@ Never hallucinate API signatures or CSS property names.
 2. **Choose strategy** — script, scaffold, or manual edit? Announce the choice.
 3. **Confirm before touching files** — "Voy a crear X, ¿ok?".
 4. **Execute** — use scripts first; edit/extend output as needed.
-5. **Summarise** — list files changed and next suggested step.
+5. **Summarise & offer run** — list files changed, then ask:
+   "¿Quieres que ejecute `./compile_and_run.sh` en la carpeta `java/`?"
+   Before running, read `java/compile_and_run.sh` and verify it includes the JavaFX
+   module path (`--module-path`, `--add-modules javafx.controls,javafx.fxml`, etc.).
+   If it does not, patch the script with Edit to add the correct JavaFX flags before
+   executing — no need to ask permission for the patch, just inform the user what was
+   changed. Then run: `cd java && ./compile_and_run.sh`
+6. **Self-improve** — after every task, reflect on what was learned or used that is not
+   yet documented in this file (`claude/agents/javafx-expert.md`) or in
+   `claude_agent/javafx-expert-config.md`. Examples worth adding: a new JavaFX pattern
+   used, a library version confirmed to work, a flag added to `compile_and_run.sh`, a
+   new script created in `.claude/scripts/`, a project-specific convention discovered.
+   If anything qualifies, propose it in one line:
+   "He aprendido X — ¿quieres que lo añada a mi configuración?"
+   Only edit the file if the user says yes. Never add trivial or task-specific details;
+   only add knowledge that will be useful in future sessions.
 
 ## JavaFX Best Practices to Follow
 - Separate concerns: Controller ↔ View (FXML/CSS) ↔ Model (POJO/ViewModel).

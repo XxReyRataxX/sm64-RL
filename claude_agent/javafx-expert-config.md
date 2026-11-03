@@ -95,20 +95,22 @@ mediante scripts reutilizables y confirmando cada decisión con el usuario antes
 
 | Script                  | Qué genera                                      | Uso rápido |
 |-------------------------|-------------------------------------------------|------------|
-| `scaffold_javafx.sh`    | Clase Java + CSS stub + JUnit test              | `./scaffold_javafx.sh LoginView com.app.views` |
-| `gen_fxml.sh`           | FXML mínimo para un controller                  | `./gen_fxml.sh LoginController com.app.views` |
+| `scaffold_javafx.sh`    | Clase Java + CSS stub + JUnit test              | `./.claude/scripts/scaffold_javafx.sh LoginView com.app.views` |
+| `gen_fxml.sh`           | FXML mínimo para un controller                  | `./.claude/scripts/gen_fxml.sh LoginController com.app.views` |
 
 ---
 
 ## Ubicación del Agente
 
 ```
-.claude/agents/javafx-expert.md   ← definición del agente (model: claude-opus-5-5)
-claude_agent/
-├── javafx-expert-config.md       ← este documento
+.claude/
+├── agents/
+│   └── javafx-expert.md          ← definición del agente (model: claude-opus-5)
 └── scripts/
     ├── scaffold_javafx.sh
     └── gen_fxml.sh
+claude_agent/
+└── javafx-expert-config.md       ← este documento
 ```
 
 ---

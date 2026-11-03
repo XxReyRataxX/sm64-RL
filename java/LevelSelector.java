@@ -1,396 +1,244 @@
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.geom.RoundRectangle2D;
-import java.util.*;
-import javax.swing.*;
-import javax.swing.plaf.basic.BasicComboBoxUI;
-import javax.swing.plaf.basic.BasicSliderUI;
-import javax.swing.KeyStroke;
+import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Rectangle;
+import javafx.stage.Stage;
+import javafx.stage.StageStyle;
+import java.util.Base64;
 
-public class LevelSelector extends JFrame {
+public class LevelSelector extends Application {
 
     // ── Palette ────────────────────────────────────────────────
-    private static final Color BG        = new Color(0x0C0C0E);
-    private static final Color SURFACE   = new Color(0x141416);
-    private static final Color SURFACE_H = new Color(0x1C1C20);
-    private static final Color BORDER    = new Color(0x252528);
-    private static final Color TEXT_1    = new Color(0xF0F0F2);
-    private static final Color TEXT_2    = new Color(0x72727A);
-    private static final Color ACCENT    = new Color(0x4F8EF7);
-    private static final Color ACCENT_H  = new Color(0x6FA3FF);
+    private static final String BG      = "#0C0C0E";
+    private static final String SURFACE = "#141416";
+    private static final String SURF_H  = "#1C1C20";
+    private static final String BORDER  = "#252528";
+    private static final String TEXT1   = "#F0F0F2";
+    private static final String TEXT2   = "#72727A";
+    private static final String ACCENT  = "#4F8EF7";
+    private static final String ACCENT2 = "#6FA3FF";
 
     // ── Levels ─────────────────────────────────────────────────
     private static final Level[] LEVELS = {
-        new Level("Bob-omb Battlefield", "Course 1", new Color(0x5CC96E), "9"),
-        new Level("Cool, Cool Mountain",  "Course 4", new Color(0x59A8E8), "5")
+        new Level("Bob-omb Battlefield", "Course 1", "9"),
+        new Level("Cool, Cool Mountain",  "Course 4", "5")
     };
 
-    // ── Font ───────────────────────────────────────────────────
-    private static final String TECH_FONT;
-    static {
-        Set<String> available = new HashSet<>(Arrays.asList(
-            GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames()
-        ));
-        String found = Font.MONOSPACED;
-        for (String f : new String[]{"Ubuntu Mono","JetBrains Mono","Fira Code",
-                                      "Consolas","Cascadia Code","Source Code Pro",
-                                      "DejaVu Sans Mono","Liberation Mono","Courier New"}) {
-            if (available.contains(f)) { found = f; break; }
-        }
-        TECH_FONT = found;
-    }
-    private static Font tf(int style, int size) { return new Font(TECH_FONT, style, size); }
-
     // ── State ──────────────────────────────────────────────────
-    private JComboBox<String> levelCombo;
-    private JSlider  speedSlider;
-    private JLabel   speedLabel;
-    private JButton  launchBtn;
+    private ComboBox<String> levelCombo;
+    private Slider           speedSlider;
+    private Label            speedLabel;
+    private double           dragX, dragY;
 
     // ══════════════════════════════════════════════════════════
 
-    public LevelSelector() {
-        super("SM64 — Launcher");
-        setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setResizable(false);
-        setUndecorated(true);
+    @Override
+    public void start(Stage stage) {
+        stage.initStyle(StageStyle.TRANSPARENT);
 
-        JPanel root = new JPanel(new BorderLayout());
-        root.setBackground(BG);
-        root.setBorder(BorderFactory.createLineBorder(BORDER, 1));
-        setContentPane(root);
+        BorderPane root = new BorderPane();
+        root.setStyle("-fx-background-color: " + BG + "; -fx-border-color: " + BORDER + "; -fx-border-width: 1;");
 
-        root.add(buildTitleBar(), BorderLayout.NORTH);
-        root.add(buildBody(),     BorderLayout.CENTER);
+        Rectangle clip = new Rectangle(480, 360);
+        clip.setArcWidth(16);
+        clip.setArcHeight(16);
+        root.setClip(clip);
 
-        // Escape key closes the window cleanly
-        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
-            .put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close");
-        getRootPane().getActionMap().put("close", new AbstractAction() {
-            public void actionPerformed(java.awt.event.ActionEvent e) { System.exit(0); }
-        });
+        root.setTop(buildTitleBar(stage));
+        root.setCenter(buildBody(stage));
 
-        setSize(480, 340);
-        setLocationRelativeTo(null);
-        // setShape after setSize so the input region matches the actual window size
-        setShape(new RoundRectangle2D.Double(0, 0, 480, 340, 16, 16));
+        Scene scene = new Scene(root, 480, 360);
+        scene.setFill(Color.TRANSPARENT);
+        scene.getStylesheets().add(
+            "data:text/css;base64," + Base64.getEncoder().encodeToString(buildCSS().getBytes())
+        );
+
+        stage.setScene(scene);
+        stage.show();
     }
 
-    // ── Draggable title bar ────────────────────────────────────
-    private JPanel buildTitleBar() {
-        JPanel bar = new JPanel(new BorderLayout());
-        bar.setBackground(BG);
-        bar.setBorder(BorderFactory.createEmptyBorder(14, 20, 10, 16));
+    // ── CSS (embedded) ─────────────────────────────────────────
+    private String buildCSS() {
+        return
+            ".combo-box { -fx-background-color: " + SURFACE + "; -fx-border-color: " + BORDER + "; " +
+            "  -fx-font-family: monospace; -fx-font-size: 13px; }\n" +
+            ".combo-box .list-cell { -fx-background-color: " + SURFACE + "; -fx-text-fill: " + TEXT1 + "; " +
+            "  -fx-font-family: monospace; -fx-font-size: 13px; -fx-padding: 6px 10px; }\n" +
+            ".combo-box-popup .list-view { -fx-background-color: " + SURFACE + "; -fx-border-color: " + BORDER + "; }\n" +
+            ".combo-box-popup .list-cell:hover { -fx-background-color: " + SURF_H + "; }\n" +
+            ".combo-box-popup .list-cell:selected, .combo-box-popup .list-cell:selected:hover " +
+            "  { -fx-background-color: " + SURF_H + "; }\n" +
+            ".combo-box .arrow-button { -fx-background-color: " + SURFACE + "; }\n" +
+            ".combo-box .arrow { -fx-background-color: " + TEXT2 + "; }\n" +
+            ".slider { -fx-background-color: transparent; }\n" +
+            ".slider .track { -fx-background-color: " + BORDER + "; -fx-pref-height: 3px; " +
+            "  -fx-background-insets: 0; -fx-background-radius: 2; }\n" +
+            ".slider .thumb { -fx-background-color: " + BG + "; " +
+            "  -fx-border-color: " + ACCENT + "; -fx-border-width: 2; " +
+            "  -fx-background-radius: 50%; -fx-border-radius: 50%; " +
+            "  -fx-pref-width: 14px; -fx-pref-height: 14px; -fx-effect: null; }\n" +
+            ".slider .thumb:hover { -fx-border-color: " + ACCENT2 + "; }\n" +
+            ".slider .axis { -fx-tick-label-fill: transparent; }\n";
+    }
 
-        JLabel app = new JLabel("SM64 Launcher");
-        app.setFont(tf(Font.PLAIN, 12));
-        app.setForeground(TEXT_2);
+    // ── Title bar ──────────────────────────────────────────────
+    private HBox buildTitleBar(Stage stage) {
+        Label title = label("SM64 Launcher", 12, TEXT2, false);
 
-        JButton close = new JButton("×");
-        close.setFont(tf(Font.PLAIN, 16));
-        close.setForeground(TEXT_2);
-        close.setBorderPainted(false);
-        close.setContentAreaFilled(false);
-        close.setFocusPainted(false);
-        close.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        close.addMouseListener(new MouseAdapter() {
-            public void mouseEntered(MouseEvent e) { close.setForeground(TEXT_1); }
-            public void mouseExited(MouseEvent e)  { close.setForeground(TEXT_2); }
-        });
-        close.addActionListener(e -> System.exit(0));
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        bar.add(app,   BorderLayout.WEST);
-        bar.add(close, BorderLayout.EAST);
+        Button close = new Button("×");
+        close.setStyle(closeStyle(TEXT2));
+        close.setOnMouseEntered(e -> close.setStyle(closeStyle(TEXT1)));
+        close.setOnMouseExited(e  -> close.setStyle(closeStyle(TEXT2)));
+        close.setOnAction(e -> Platform.exit());
 
-        final int[] drag = new int[2];
-        bar.addMouseListener(new MouseAdapter() {
-            public void mousePressed(MouseEvent e) { drag[0] = e.getX(); drag[1] = e.getY(); }
-        });
-        bar.addMouseMotionListener(new MouseMotionAdapter() {
-            public void mouseDragged(MouseEvent e) {
-                Point p = getLocation();
-                setLocation(p.x + e.getX() - drag[0], p.y + e.getY() - drag[1]);
-            }
+        HBox bar = new HBox(title, spacer, close);
+        bar.setPadding(new Insets(14, 16, 10, 20));
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.setStyle("-fx-background-color: transparent;");
+
+        bar.setOnMousePressed(e -> { dragX = e.getSceneX(); dragY = e.getSceneY(); });
+        bar.setOnMouseDragged(e -> {
+            stage.setX(e.getScreenX() - dragX);
+            stage.setY(e.getScreenY() - dragY);
         });
         return bar;
     }
 
     // ── Body ───────────────────────────────────────────────────
-    private JPanel buildBody() {
-        JPanel p = new JPanel();
-        p.setBackground(BG);
-        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-        p.setBorder(BorderFactory.createEmptyBorder(4, 28, 28, 28));
+    private VBox buildBody(Stage stage) {
+        Label heading = label("Select level", 20, TEXT1, true);
+        Label sub     = label("Choose where to start, then launch.", 12, TEXT2, false);
+        VBox.setMargin(sub, new Insets(4, 0, 22, 0));
 
-        p.add(heading("Select level", 20, TEXT_1, Font.BOLD));
-        p.add(Box.createVerticalStrut(4));
-        p.add(heading("Choose where to start, then launch.", 12, TEXT_2, Font.PLAIN));
-        p.add(Box.createVerticalStrut(22));
-        p.add(buildLevelRow());
-        p.add(Box.createVerticalStrut(20));
-        p.add(divider());
-        p.add(Box.createVerticalStrut(18));
-        p.add(buildSpeedRow());
-        p.add(Box.createVerticalStrut(8));
-        p.add(buildSlider());
-        p.add(Box.createVerticalStrut(6));
-        p.add(buildSpeedHints());
-        p.add(Box.createVerticalStrut(20));
-        p.add(divider());
-        p.add(Box.createVerticalStrut(16));
-        p.add(buildLaunchRow());
+        HBox  levelRow  = buildLevelRow();
+        Separator div1  = divider();
+        VBox.setMargin(div1, new Insets(20, 0, 18, 0));
 
-        return p;
+        HBox  speedRow  = buildSpeedRow();
+        Slider slider   = buildSlider();
+        VBox.setMargin(slider, new Insets(8, 0, 0, 0));
+        HBox  hints     = buildSpeedHints();
+        VBox.setMargin(hints, new Insets(6, 0, 0, 0));
+
+        Separator div2  = divider();
+        VBox.setMargin(div2, new Insets(20, 0, 16, 0));
+
+        HBox launchRow  = buildLaunchRow(stage);
+
+        VBox body = new VBox(heading, sub, levelRow, div1, speedRow, slider, hints, div2, launchRow);
+        body.setPadding(new Insets(4, 28, 28, 28));
+        body.setStyle("-fx-background-color: transparent;");
+        return body;
     }
 
-    private JLabel heading(String text, int size, Color color, int style) {
-        JLabel l = new JLabel(text);
-        l.setFont(tf(style, size));
-        l.setForeground(color);
-        l.setAlignmentX(LEFT_ALIGNMENT);
-        return l;
-    }
+    // ── Level row ──────────────────────────────────────────────
+    private HBox buildLevelRow() {
+        Label lbl = label("Level", 12, TEXT2, false);
+        lbl.setMinWidth(54);
 
-    // ── Level dropdown ─────────────────────────────────────────
-    private JPanel buildLevelRow() {
-        JPanel row = new JPanel(new BorderLayout(12, 0));
-        row.setOpaque(false);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 38));
+        levelCombo = new ComboBox<>();
+        for (Level l : LEVELS) levelCombo.getItems().add(l.name + "  (" + l.course + ")");
+        levelCombo.getSelectionModel().selectFirst();
+        levelCombo.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(levelCombo, Priority.ALWAYS);
 
-        JLabel lbl = new JLabel("Level");
-        lbl.setFont(tf(Font.PLAIN, 12));
-        lbl.setForeground(TEXT_2);
-        lbl.setPreferredSize(new Dimension(54, 38));
-
-        String[] names = Arrays.stream(LEVELS).map(l -> l.name + "  (" + l.course + ")").toArray(String[]::new);
-        levelCombo = new JComboBox<>(names);
-        levelCombo.setFont(tf(Font.PLAIN, 13));
-        levelCombo.setForeground(TEXT_1);
-        levelCombo.setBackground(SURFACE);
-        levelCombo.setBorder(BorderFactory.createLineBorder(BORDER));
-        levelCombo.setFocusable(false);
-        styleCombo(levelCombo);
-
-        row.add(lbl,        BorderLayout.WEST);
-        row.add(levelCombo, BorderLayout.CENTER);
+        HBox row = new HBox(12, lbl, levelCombo);
+        row.setAlignment(Pos.CENTER_LEFT);
         return row;
-    }
-
-    private void styleCombo(JComboBox<String> cb) {
-        cb.setUI(new BasicComboBoxUI() {
-            @Override protected JButton createArrowButton() {
-                JButton btn = new JButton("▾") {
-                    public void paintComponent(Graphics g) {
-                        g.setColor(SURFACE_H);
-                        g.fillRect(0, 0, getWidth(), getHeight());
-                        g.setFont(new Font(TECH_FONT, Font.PLAIN, 12));
-                        g.setColor(TEXT_2);
-                        FontMetrics fm = g.getFontMetrics();
-                        String t = "▾";
-                        g.drawString(t, (getWidth() - fm.stringWidth(t)) / 2,
-                                        (getHeight() + fm.getAscent() - fm.getDescent()) / 2);
-                    }
-                };
-                btn.setBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, BORDER));
-                btn.setFocusPainted(false);
-                btn.setContentAreaFilled(false);
-                return btn;
-            }
-            @Override public void paintCurrentValueBackground(Graphics g, Rectangle bounds, boolean hasFocus) {
-                g.setColor(SURFACE);
-                g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
-            }
-        });
-
-        cb.setRenderer(new DefaultListCellRenderer() {
-            public Component getListCellRendererComponent(JList<?> list, Object value,
-                    int index, boolean isSelected, boolean cellHasFocus) {
-                JLabel l = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                l.setFont(tf(Font.PLAIN, 13));
-                l.setForeground(isSelected ? TEXT_1 : TEXT_1);
-                l.setBackground(isSelected ? SURFACE_H : SURFACE);
-                l.setBorder(BorderFactory.createEmptyBorder(6, 10, 6, 10));
-                if (index >= 0) {
-                    Color dot = LEVELS[index].color;
-                    l.setIcon(new Icon() {
-                        public void paintIcon(Component c, Graphics g, int x, int y) {
-                            g.setColor(dot);
-                            g.fillOval(x, y + 3, 8, 8);
-                        }
-                        public int getIconWidth()  { return 14; }
-                        public int getIconHeight() { return 14; }
-                    });
-                }
-                return l;
-            }
-        });
-
-        // Force popup background
-        Object popup = cb.getUI().getAccessibleChild(cb, 0);
-        if (popup instanceof JPopupMenu) {
-            ((JPopupMenu) popup).setBackground(SURFACE);
-        }
     }
 
     // ── Speed section ──────────────────────────────────────────
-    private JPanel buildSpeedRow() {
-        JPanel row = new JPanel(new BorderLayout());
-        row.setOpaque(false);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+    private HBox buildSpeedRow() {
+        Label lbl = label("Game speed", 12, TEXT2, false);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        speedLabel = label("1.0×", 13, ACCENT, true);
 
-        JLabel lbl = new JLabel("Game speed");
-        lbl.setFont(tf(Font.PLAIN, 12));
-        lbl.setForeground(TEXT_2);
-
-        speedLabel = new JLabel("1.0×");
-        speedLabel.setFont(tf(Font.BOLD, 13));
-        speedLabel.setForeground(ACCENT);
-
-        row.add(lbl,        BorderLayout.WEST);
-        row.add(speedLabel, BorderLayout.EAST);
+        HBox row = new HBox(lbl, spacer, speedLabel);
+        row.setAlignment(Pos.CENTER_LEFT);
         return row;
     }
 
-    private JSlider buildSlider() {
-        speedSlider = new JSlider(10, 50, 10);
-        speedSlider.setOpaque(true);
-        speedSlider.setBackground(BG);
-        speedSlider.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
-        speedSlider.setAlignmentX(LEFT_ALIGNMENT);
-        speedSlider.setUI(new BasicSliderUI(speedSlider) {
-            @Override public void paint(Graphics g, JComponent c) {
-                // Expand clip to full component — prevents ghost from partial-region repaints
-                g.setClip(0, 0, c.getWidth(), c.getHeight());
-                g.setColor(BG);
-                g.fillRect(0, 0, c.getWidth(), c.getHeight());
-                super.paint(g, c);
-            }
-            @Override public void paintTrack(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g;
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                int cy = trackRect.y + trackRect.height / 2 - 1;
-                int tx = thumbRect.x + thumbRect.width / 2;
-                g2.setColor(ACCENT);
-                g2.fillRoundRect(trackRect.x, cy, tx - trackRect.x, 3, 3, 3);
-                g2.setColor(BORDER);
-                g2.fillRoundRect(tx, cy, trackRect.x + trackRect.width - tx, 3, 3, 3);
-            }
-            @Override public void paintThumb(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g;
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                int cx = thumbRect.x + thumbRect.width / 2;
-                int cy = thumbRect.y + thumbRect.height / 2;
-                g2.setColor(BG);     g2.fillOval(cx - 7, cy - 7, 14, 14);
-                g2.setColor(ACCENT); g2.setStroke(new BasicStroke(2f));
-                g2.drawOval(cx - 7, cy - 7, 14, 14);
-            }
-            @Override public void paintFocus(Graphics g) {}
-        });
-        speedSlider.addChangeListener(e -> {
-            double v = speedSlider.getValue() / 10.0;
-            speedLabel.setText(String.format("%.1f×", v));
-        });
+    private Slider buildSlider() {
+        speedSlider = new Slider(10, 50, 10);
+        speedSlider.setMaxWidth(Double.MAX_VALUE);
+        speedSlider.setShowTickLabels(false);
+        speedSlider.setShowTickMarks(false);
+        speedSlider.valueProperty().addListener((obs, o, n) ->
+            speedLabel.setText(String.format("%.1f×", n.doubleValue() / 10.0))
+        );
         return speedSlider;
     }
 
-    private JPanel buildSpeedHints() {
-        JPanel row = new JPanel(new BorderLayout());
-        row.setOpaque(false);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 16));
-        row.setAlignmentX(LEFT_ALIGNMENT);
-        JLabel lo = mk("1.0× — normal", 11, TEXT_2);
-        JLabel hi = mk("5.0× — max",    11, TEXT_2);
-        row.add(lo, BorderLayout.WEST);
-        row.add(hi, BorderLayout.EAST);
-        return row;
+    private HBox buildSpeedHints() {
+        Label lo = label("1.0× — normal", 11, TEXT2, false);
+        Region sp = new Region();
+        HBox.setHgrow(sp, Priority.ALWAYS);
+        Label hi = label("5.0× — max", 11, TEXT2, false);
+        return new HBox(lo, sp, hi);
     }
 
     // ── Launch row ─────────────────────────────────────────────
-    private JPanel buildLaunchRow() {
-        JPanel row = new JPanel(new BorderLayout(12, 0));
-        row.setOpaque(false);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+    private HBox buildLaunchRow(Stage stage) {
+        Label hint = label("Ready to launch.", 12, TEXT2, false);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        JLabel hint = new JLabel("Ready to launch.");
-        hint.setFont(tf(Font.PLAIN, 12));
-        hint.setForeground(TEXT_2);
-
-        launchBtn = new JButton("Launch") {
-            @Override protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                boolean pr = getModel().isPressed(), ro = getModel().isRollover();
-                g2.setColor(pr ? ACCENT.darker() : (ro ? ACCENT_H : ACCENT));
-                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
-                g2.setFont(tf(Font.BOLD, 13));
-                g2.setColor(Color.WHITE);
-                FontMetrics fm = g2.getFontMetrics();
-                String txt = getText();
-                g2.drawString(txt, (getWidth() - fm.stringWidth(txt)) / 2,
-                              (getHeight() + fm.getAscent() - fm.getDescent()) / 2);
-                g2.dispose();
-            }
-        };
-        launchBtn.setPreferredSize(new Dimension(100, 36));
-        launchBtn.setOpaque(false);
-        launchBtn.setContentAreaFilled(false);
-        launchBtn.setBorderPainted(false);
-        launchBtn.setFocusPainted(false);
-        launchBtn.setRolloverEnabled(true);
-        launchBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        launchBtn.addMouseListener(new MouseAdapter() {
-            public void mouseEntered(MouseEvent e) { launchBtn.repaint(); }
-            public void mouseExited(MouseEvent e)  { launchBtn.repaint(); }
-        });
-        launchBtn.addActionListener(e -> {
-            int idx   = levelCombo.getSelectedIndex();
+        Button btn = new Button("Launch");
+        btn.setStyle(launchStyle(ACCENT));
+        btn.setOnMouseEntered(e -> btn.setStyle(launchStyle(ACCENT2)));
+        btn.setOnMouseExited(e  -> btn.setStyle(launchStyle(ACCENT)));
+        btn.setOnAction(e -> {
+            int idx    = levelCombo.getSelectionModel().getSelectedIndex();
             double spd = speedSlider.getValue() / 10.0;
             GameLauncher.launch(LEVELS[idx].courseId, spd);
-            dispose();
+            stage.close();
         });
 
-        row.add(hint,      BorderLayout.WEST);
-        row.add(launchBtn, BorderLayout.EAST);
+        HBox row = new HBox(12, hint, spacer, btn);
+        row.setAlignment(Pos.CENTER_LEFT);
         return row;
     }
 
     // ── Helpers ────────────────────────────────────────────────
-    private JLabel mk(String text, int size, Color color) {
-        JLabel l = new JLabel(text);
-        l.setFont(tf(Font.PLAIN, size));
-        l.setForeground(color);
+    private Label label(String text, int size, String color, boolean bold) {
+        Label l = new Label(text);
+        l.setStyle(
+            "-fx-font-family: monospace; -fx-font-size: " + size + "px;" +
+            " -fx-text-fill: " + color + ";" +
+            (bold ? " -fx-font-weight: bold;" : "")
+        );
         return l;
     }
 
-    private JPanel divider() {
-        JPanel p = new JPanel() {
-            protected void paintComponent(Graphics g) {
-                super.paintComponent(g);
-                g.setColor(BORDER);
-                g.drawLine(0, 0, getWidth(), 0);
-            }
-        };
-        p.setOpaque(false);
-        p.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-        p.setAlignmentX(LEFT_ALIGNMENT);
-        return p;
+    private Separator divider() {
+        Separator sep = new Separator();
+        sep.setStyle("-fx-background-color: " + BORDER + "; -fx-pref-height: 1px; -fx-border-color: transparent;");
+        return sep;
+    }
+
+    private String closeStyle(String color) {
+        return "-fx-font-family: monospace; -fx-font-size: 16px; -fx-text-fill: " + color + ";" +
+               "-fx-background-color: transparent; -fx-border-color: transparent;" +
+               "-fx-cursor: hand; -fx-padding: 0 4 2 4;";
+    }
+
+    private String launchStyle(String bg) {
+        return "-fx-background-color: " + bg + "; -fx-text-fill: white;" +
+               "-fx-font-family: monospace; -fx-font-size: 13px; -fx-font-weight: bold;" +
+               "-fx-background-radius: 8; -fx-cursor: hand; -fx-padding: 8 20 8 20;";
     }
 
     // ══════════════════════════════════════════════════════════
-    public static void main(String[] args) {
-        System.setProperty("awt.useSystemAAFontSettings", "on");
-        System.setProperty("swing.aatext", "true");
-        SwingUtilities.invokeLater(() -> {
-            LevelSelector f = new LevelSelector();
-            f.setVisible(true);
-        });
-    }
+    public static void main(String[] args) { launch(args); }
 
-    static class Level {
-        final String name, course, courseId;
-        final Color color;
-        Level(String n, String c, Color col, String id) {
-            name = n; course = c; color = col; courseId = id;
-        }
-    }
+    record Level(String name, String course, String courseId) {}
 }
