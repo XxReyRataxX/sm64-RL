@@ -5,30 +5,33 @@ import java.io.File;
 
 public class GameLauncher {
 
-    public static void launch(String courseId, double speed) {
+    public static File findBinary() {
         try {
-            File binary = new File(
+            return new File(
                 GameLauncher.class.getProtectionDomain()
                     .getCodeSource().getLocation().toURI()
             ).getParentFile()
              .toPath()
              .resolve("build/us_pc/sm64.us")
              .toFile();
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
-            if (!binary.exists()) {
-                showError("Binary not found:\n" + binary.getAbsolutePath() +
-                    "\n\nCompile the game first with: make VERSION=us");
-                return;
-            }
-
+    public static void launch(String courseId, double speed) {
+        File binary = findBinary();
+        if (binary == null || !binary.exists()) {
+            showError("Binary not found.\n\nCompile the game first with: make VERSION=us");
+            return;
+        }
+        try {
             if (!binary.canExecute()) binary.setExecutable(true);
-
             new ProcessBuilder(
                 binary.getAbsolutePath(),
                 "--level", courseId,
                 "--speed", String.format("%.1f", speed)
             ).inheritIO().start();
-
         } catch (Exception ex) {
             showError("Failed to launch the game:\n" + ex.getMessage());
             ex.printStackTrace();
