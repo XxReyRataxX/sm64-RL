@@ -1,6 +1,7 @@
 #include <PR/ultratypes.h>
 
 extern s8 gAutoStartLevelNum;
+extern s8 gAutoStartActNum;
 
 #include "audio/external.h"
 #include "engine/math_util.h"
@@ -90,7 +91,7 @@ s16 intro_level_select(void) {
 
     if (gAutoStartLevelNum > 0) {
         gCurrSaveFileNum = 1;
-        gCurrActNum = 1;
+        gCurrActNum = (gAutoStartActNum >= 1 && gAutoStartActNum <= 6) ? gAutoStartActNum : 1;
         return gCurrLevelNum;
     }
 

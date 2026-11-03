@@ -44,6 +44,7 @@ s8 gDebugLevelSelect;
 s8 gShowProfiler;
 s8 gShowDebugText;
 s8 gAutoStartLevelNum;
+s8 gAutoStartActNum = 1;
 float gSpeedMultiplier = 1.0f;
 
 static struct AudioAPI *audio_api;
@@ -237,6 +238,10 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
             gAutoStartLevelNum = (s8)atoi(argv[++i]);
             gDebugLevelSelect = 1;
+        } else if (strcmp(argv[i], "--star") == 0 && i + 1 < argc) {
+            gAutoStartActNum = (s8)atoi(argv[++i]);
+            if (gAutoStartActNum < 1) gAutoStartActNum = 1;
+            if (gAutoStartActNum > 6) gAutoStartActNum = 6;
         } else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
             gSpeedMultiplier = (float)atof(argv[++i]);
             if (gSpeedMultiplier < 1.0f) gSpeedMultiplier = 1.0f;

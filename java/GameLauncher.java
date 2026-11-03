@@ -19,7 +19,7 @@ public class GameLauncher {
         }
     }
 
-    public static void launch(String courseId, double speed) {
+    public static void launch(String courseId, double speed, int starId) {
         File binary = findBinary();
         if (binary == null || !binary.exists()) {
             showError("Binary not found.\n\nCompile the game first with: make VERSION=us");
@@ -30,7 +30,8 @@ public class GameLauncher {
             new ProcessBuilder(
                 binary.getAbsolutePath(),
                 "--level", courseId,
-                "--speed", String.format("%.1f", speed)
+                "--speed", String.format("%.1f", speed),
+                "--star",  String.valueOf(starId)
             ).inheritIO().start();
         } catch (Exception ex) {
             showError("Failed to launch the game:\n" + ex.getMessage());

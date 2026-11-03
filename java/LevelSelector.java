@@ -29,17 +29,32 @@ public class LevelSelector extends Application {
 
     // ── Levels ─────────────────────────────────────────────────
     private static final Level[] LEVELS = {
-        new Level("Bob-omb Battlefield", "Course 1", "9"),
-        new Level("Cool, Cool Mountain",  "Course 4", "5")
+        new Level("Bob-omb Battlefield", "Course 1", "9", new Star[] {
+            new Star("Big Bob-omb on the Summit",     1),
+            new Star("Footprint Puzzle",              2),
+            new Star("Shoot to the Island in the Sky", 3),
+            new Star("Find 5 Bob-ombs!",              4),
+            new Star("Mario Wings to the Sky",        5),
+            new Star("Behind Chain Chomp's Gate",     6)
+        }),
+        new Level("Cool, Cool Mountain",  "Course 4", "5", new Star[] {
+            new Star("Slip Slidin' Away",             1),
+            new Star("Li'l Penguin Lost",             2),
+            new Star("Big Penguin Race",              3),
+            new Star("Frosty Slide for 8 Red Coins",  4),
+            new Star("Snowman's Lost His Head",       5),
+            new Star("Wall Kicks Will Work",          6)
+        })
     };
 
     // ── Layout constants ───────────────────────────────────────
     private static final int W           = 480;
-    private static final int BASE_H      = 360;
+    private static final int BASE_H      = 400;
     private static final int TERM_H      = 160;
 
     // ── State ──────────────────────────────────────────────────
     private ComboBox<String> levelCombo;
+    private ComboBox<String> starCombo;
     private Slider           speedSlider;
     private Label            speedLabel;
     private Label            blocksFilled;
@@ -143,6 +158,9 @@ public class LevelSelector extends Application {
         VBox.setMargin(sub, new Insets(4, 0, 22, 0));
 
         HBox  levelRow = buildLevelRow();
+        HBox  starRow  = buildStarRow();
+        VBox.setMargin(starRow, new Insets(10, 0, 0, 0));
+
         Separator div1 = divider();
         VBox.setMargin(div1, new Insets(20, 0, 18, 0));
 
@@ -159,7 +177,7 @@ public class LevelSelector extends Application {
 
         HBox launchRow = buildLaunchRow(stage);
 
-        VBox body = new VBox(heading, sub, levelRow, div1, speedRow, slider, blockBar, hints, div2, launchRow);
+        VBox body = new VBox(heading, sub, levelRow, starRow, div1, speedRow, slider, blockBar, hints, div2, launchRow);
         body.setPadding(new Insets(4, 28, 28, 28));
         body.setStyle("-fx-background-color:transparent;");
         return body;
@@ -177,6 +195,43 @@ public class LevelSelector extends Application {
         HBox row = new HBox(12, lbl, levelCombo);
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
+    }
+
+    // ── Star row ───────────────────────────────────────────────
+    private HBox buildStarRow() {
+        Label lbl = label("Star", 12, TEXT2, false);
+        lbl.setMinWidth(54);
+        starCombo = new ComboBox<>();
+        starCombo.setMaxWidth(Double.MAX_VALUE);
+        starCombo.setAccessibleText("Star to play in the selected level");
+        HBox.setHgrow(starCombo, Priority.ALWAYS);
+
+        // Repopulate stars whenever the level changes
+        levelCombo.getSelectionModel().selectedIndexProperty()
+            .addListener((obs, o, n) -> populateStars(n.intValue()));
+        populateStars(levelCombo.getSelectionModel().getSelectedIndex());
+
+        HBox row = new HBox(12, lbl, starCombo);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private void populateStars(int levelIdx) {
+        starCombo.getItems().clear();
+        if (levelIdx < 0 || levelIdx >= LEVELS.length) return;
+        for (Star s : LEVELS[levelIdx].stars) {
+            starCombo.getItems().add(s.id + ".  " + s.name);
+        }
+        starCombo.getSelectionModel().selectFirst();
+    }
+
+    private int selectedStarId() {
+        int lvl  = levelCombo.getSelectionModel().getSelectedIndex();
+        int star = starCombo.getSelectionModel().getSelectedIndex();
+        if (lvl < 0 || lvl >= LEVELS.length) return 1;
+        Star[] stars = LEVELS[lvl].stars;
+        if (star < 0 || star >= stars.length) return 1;
+        return stars[star].id;
     }
 
     // ── Speed row ──────────────────────────────────────────────
@@ -242,9 +297,10 @@ public class LevelSelector extends Application {
         btn.setOnMouseExited(e  -> btn.setStyle(launchStyle(ACCENT)));
         btn.setOnAction(e -> {
             int idx    = levelCombo.getSelectionModel().getSelectedIndex();
+            int starId = selectedStarId();
             double spd = speedSlider.getValue() / 10.0;
             revealTerminal(stage);
-            runProcess(LEVELS[idx].courseId, spd);
+            runProcess(LEVELS[idx].courseId, spd, starId);
         });
 
         HBox row = new HBox(12, hint, spacer, btn);
@@ -281,11 +337,12 @@ public class LevelSelector extends Application {
         stage.setHeight(newH);
     }
 
-    private void runProcess(String courseId, double speed) {
+    private void runProcess(String courseId, double speed, int starId) {
         java.io.File binary = GameLauncher.findBinary();
         String cmd = (binary != null ? binary.getAbsolutePath() : "sm64.us") +
                      " --level " + courseId +
-                     " --speed " + String.format("%.1f", speed);
+                     " --speed " + String.format("%.1f", speed) +
+                     " --star "  + starId;
 
         termAppend("$ " + cmd);
 
@@ -299,7 +356,8 @@ public class LevelSelector extends Application {
             ProcessBuilder pb = new ProcessBuilder(
                 binary.getAbsolutePath(),
                 "--level", courseId,
-                "--speed", String.format("%.1f", speed)
+                "--speed", String.format("%.1f", speed),
+                "--star",  String.valueOf(starId)
             );
             pb.redirectErrorStream(true);
             Process p = pb.start();
@@ -362,5 +420,6 @@ public class LevelSelector extends Application {
     // ══════════════════════════════════════════════════════════
     public static void main(String[] args) { launch(args); }
 
-    record Level(String name, String course, String courseId) {}
+    record Star(String name, int id) {}
+    record Level(String name, String course, String courseId, Star[] stars) {}
 }

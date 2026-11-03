@@ -60,23 +60,34 @@ game loop / level loader / RL hooks
 
 | Global | Tipo | Declarado en | Usado en | Valor por defecto |
 |--------|------|-------------|----------|-------------------|
-| `gAutoStartLevelNum` | `s8` | `pc_main.c:44` | `title_screen.c:91,163` | `0` (no saltar) |
-| `gSpeedMultiplier` | `float` | `pc_main.c:45` | `gfx_sdl2.c:275`, `gfx_glx.c:455` | `1.0f` |
-| `gDebugLevelSelect` | `s8` | `pc_main.c:42` | activado al parsear `--level` | `0` |
+| `gAutoStartLevelNum` | `s8` | `pc_main.c:46` | `title_screen.c:92,165` | `0` (no saltar) |
+| `gAutoStartActNum` | `s8` | `pc_main.c:47` | `title_screen.c:94` (→ `gCurrActNum`) | `1` |
+| `gSpeedMultiplier` | `float` | `pc_main.c:48` | `gfx_sdl2.c:275`, `gfx_glx.c:455` | `1.0f` |
+| `gDebugLevelSelect` | `s8` | `pc_main.c:43` | activado al parsear `--level` | `0` |
 
 ### Args CLI activos hoy
 
 ```c
-// src/pc/pc_main.c, línea ~237
+// src/pc/pc_main.c, línea ~238
 if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
     gAutoStartLevelNum = (s8)atoi(argv[++i]);
     gDebugLevelSelect = 1;
+} else if (strcmp(argv[i], "--star") == 0 && i + 1 < argc) {
+    gAutoStartActNum = (s8)atoi(argv[++i]);
+    if (gAutoStartActNum < 1) gAutoStartActNum = 1;
+    if (gAutoStartActNum > 6) gAutoStartActNum = 6;
 } else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
     gSpeedMultiplier = (float)atof(argv[++i]);
     if (gSpeedMultiplier < 1.0f) gSpeedMultiplier = 1.0f;
     if (gSpeedMultiplier > 5.0f) gSpeedMultiplier = 5.0f;
 }
 ```
+
+| Arg CLI | Tipo | Global destino | Rango / clamp |
+|---------|------|----------------|---------------|
+| `--level <n>` | `s8` | `gAutoStartLevelNum` (+ `gDebugLevelSelect = 1`) | sin clamp |
+| `--star <n>` | `s8` | `gAutoStartActNum` → `gCurrActNum` | clamp 1–6 |
+| `--speed <f>` | `float` | `gSpeedMultiplier` | clamp 1.0–5.0 |
 
 ### Correspondencia Java
 
@@ -85,9 +96,21 @@ if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
 new ProcessBuilder(
     binary.getAbsolutePath(),
     "--level", courseId,          // String del Level.id en LevelSelector
-    "--speed", String.format("%.1f", speed)
+    "--speed", String.format("%.1f", speed),
+    "--star",  String.valueOf(starId)
 ).inheritIO().start();
 ```
+
+Firma actual: `GameLauncher.launch(String courseId, double speed, int starId)`.
+
+### Flujo del acto (estrella)
+
+`main()` parsea `--star` → `gAutoStartActNum` → `intro_regular()` devuelve `101`
+(pantalla de level select de debug) → `intro_level_select()` detecta
+`gAutoStartLevelNum > 0` y asigna `gCurrSaveFileNum = 1` y
+`gCurrActNum = gAutoStartActNum` antes de devolver `gCurrLevelNum`.
+`gCurrActNum` es `s16`, declarado en `src/game/area.c:33`, `extern` en
+`src/game/area.h:145`.
 
 ---
 
@@ -188,3 +211,4 @@ Scripts disponibles en `.claude/scripts/`:
 | Fecha | Cambio | Archivos afectados |
 |-------|--------|--------------------|
 | 2026-11-03 | Creación del doc con estado inicial | — |
+| 2026-11-03 | Añadido arg `--star` + global `gAutoStartActNum` (→ `gCurrActNum`) | `src/pc/pc_main.c`, `src/menu/title_screen.c` |
