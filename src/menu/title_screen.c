@@ -1,5 +1,7 @@
 #include <PR/ultratypes.h>
 
+extern s8 gAutoStartLevelNum;
+
 #include "audio/external.h"
 #include "engine/math_util.h"
 #include "game/area.h"
@@ -86,6 +88,12 @@ s32 run_level_id_or_demo(s32 level) {
 s16 intro_level_select(void) {
     s32 stageChanged = FALSE;
 
+    if (gAutoStartLevelNum > 0) {
+        gCurrSaveFileNum = 1;
+        gCurrActNum = 1;
+        return gCurrLevelNum;
+    }
+
     // perform the ID updates per each button press.
     // runs into a loop so after a button is pressed
     // stageChanged goes back to FALSE
@@ -151,6 +159,11 @@ s16 intro_level_select(void) {
  */
 s32 intro_regular(void) {
     s32 level = LEVEL_NONE;
+
+    if (gAutoStartLevelNum > 0) {
+        gCurrLevelNum = gAutoStartLevelNum;
+        return 101;
+    }
 
 #ifndef VERSION_JP
     // When the game stars, gGlobalTimer is less than 129 frames,

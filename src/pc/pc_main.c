@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef TARGET_WEB
 #include <emscripten.h>
@@ -42,6 +43,8 @@ s8 gNmiResetBarsTimer;
 s8 gDebugLevelSelect;
 s8 gShowProfiler;
 s8 gShowDebugText;
+s8 gAutoStartLevelNum;
+float gSpeedMultiplier = 1.0f;
 
 static struct AudioAPI *audio_api;
 static struct GfxWindowManagerAPI *wm_api;
@@ -229,7 +232,17 @@ int WINAPI WinMain(UNUSED HINSTANCE hInstance, UNUSED HINSTANCE hPrevInstance, U
     return 0;
 }
 #else
-int main(UNUSED int argc, UNUSED char *argv[]) {
+int main(int argc, char *argv[]) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
+            gAutoStartLevelNum = (s8)atoi(argv[++i]);
+            gDebugLevelSelect = 1;
+        } else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
+            gSpeedMultiplier = (float)atof(argv[++i]);
+            if (gSpeedMultiplier < 1.0f) gSpeedMultiplier = 1.0f;
+            if (gSpeedMultiplier > 5.0f) gSpeedMultiplier = 5.0f;
+        }
+    }
     main_func();
     return 0;
 }

@@ -1601,6 +1601,7 @@ bool isAbsolutePath(const std::wstring& path);
 #endif
 
 // file: Util/FileClasses.h
+#include <cstdint>
 #include <list>
 
 class BinaryFile

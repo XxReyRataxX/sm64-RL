@@ -27,6 +27,7 @@
 *.out
 *.app
 *.hex
+*.class
 
 # Debug files
 *.dSYM/
