@@ -107,10 +107,13 @@ Firma actual: `GameLauncher.launch(String courseId, double speed, int starId)`.
 
 `main()` parsea `--star` → `gAutoStartActNum` → `intro_regular()` devuelve `101`
 (pantalla de level select de debug) → `intro_level_select()` detecta
-`gAutoStartLevelNum > 0` y asigna `gCurrSaveFileNum = 1` y
-`gCurrActNum = gAutoStartActNum` antes de devolver `gCurrLevelNum`.
+`gAutoStartLevelNum > 0` y asigna `gCurrSaveFileNum = 1`,
+`gCurrActNum = gAutoStartActNum`, desbloquea todas las caps con
+`save_file_set_flags(SAVE_FLAG_HAVE_WING_CAP | SAVE_FLAG_HAVE_METAL_CAP | SAVE_FLAG_HAVE_VANISH_CAP)`,
+y devuelve `gCurrLevelNum`.
 `gCurrActNum` es `s16`, declarado en `src/game/area.c:33`, `extern` en
 `src/game/area.h:145`.
+Las caps se desbloquean **siempre** en todo auto-arranque (no hay flag CLI para esto).
 
 ---
 
@@ -119,12 +122,21 @@ Firma actual: `GameLauncher.launch(String courseId, double speed, int starId)`.
 ```java
 // java/LevelSelector.java, línea ~31
 private static final Level[] LEVELS = {
-    new Level("Bob-omb Battlefield", "Course 1", "9"),
-    new Level("Cool, Cool Mountain",  "Course 4", "5")
+    new Level("Bob-omb Battlefield", "Course 1", "9", new Star[] {
+        new Star("Big Bob-omb on the Summit",      1),
+        new Star("Footrace with Koopa the Quick",  2),
+        new Star("Shoot to the Island in the Sky", 3),
+        new Star("Find the 8 Red Coins",           4),
+        new Star("Mario Wings to the Sky",         5),
+        new Star("Behind Chain Chomp's Gate",      6)
+    })
 };
 ```
 
-El `id` (tercer campo) es el número que se pasa como `--level`. Corresponde a `gCurrLevelNum` internamente (`src/menu/title_screen.c:164`).
+El `courseId` (tercer campo del Level) es el número que se pasa como `--level`.
+Corresponde a `gCurrLevelNum` internamente (`src/menu/title_screen.c`).
+El `Star.id` se pasa como `--star` y corresponde a `gCurrActNum`.
+Nombres de estrellas extraídos de `text/us/courses.h` (fuente oficial).
 
 ---
 

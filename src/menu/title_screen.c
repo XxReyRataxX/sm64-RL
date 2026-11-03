@@ -92,6 +92,7 @@ s16 intro_level_select(void) {
     if (gAutoStartLevelNum > 0) {
         gCurrSaveFileNum = 1;
         gCurrActNum = (gAutoStartActNum >= 1 && gAutoStartActNum <= 6) ? gAutoStartActNum : 1;
+        save_file_set_flags(SAVE_FLAG_HAVE_WING_CAP | SAVE_FLAG_HAVE_METAL_CAP | SAVE_FLAG_HAVE_VANISH_CAP);
         return gCurrLevelNum;
     }
 

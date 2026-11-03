@@ -30,20 +30,12 @@ public class LevelSelector extends Application {
     // ── Levels ─────────────────────────────────────────────────
     private static final Level[] LEVELS = {
         new Level("Bob-omb Battlefield", "Course 1", "9", new Star[] {
-            new Star("Big Bob-omb on the Summit",     1),
-            new Star("Footprint Puzzle",              2),
-            new Star("Shoot to the Island in the Sky", 3),
-            new Star("Find 5 Bob-ombs!",              4),
-            new Star("Mario Wings to the Sky",        5),
-            new Star("Behind Chain Chomp's Gate",     6)
-        }),
-        new Level("Cool, Cool Mountain",  "Course 4", "5", new Star[] {
-            new Star("Slip Slidin' Away",             1),
-            new Star("Li'l Penguin Lost",             2),
-            new Star("Big Penguin Race",              3),
-            new Star("Frosty Slide for 8 Red Coins",  4),
-            new Star("Snowman's Lost His Head",       5),
-            new Star("Wall Kicks Will Work",          6)
+            new Star("Big Bob-omb on the Summit",       1),
+            new Star("Footrace with Koopa the Quick",   2),
+            new Star("Shoot to the Island in the Sky",  3),
+            new Star("Find the 8 Red Coins",            4),
+            new Star("Mario Wings to the Sky",          5),
+            new Star("Behind Chain Chomp's Gate",       6)
         })
     };
 
