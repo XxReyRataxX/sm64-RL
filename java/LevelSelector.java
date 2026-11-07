@@ -41,12 +41,15 @@ public class LevelSelector extends Application {
 
     // ── Layout constants ───────────────────────────────────────
     private static final int W           = 480;
-    private static final int BASE_H      = 468;
+    private static final int BASE_H      = 520;
     private static final int TERM_H      = 160;
 
     // ── State ──────────────────────────────────────────────────
     private ComboBox<String> levelCombo;
     private ComboBox<String> starCombo;
+    private ComboBox<String>          modeCombo;
+    private ToggleButton              renderToggle;
+    private final java.util.List<Process> activeProcesses = new java.util.ArrayList<>();
     private Slider           speedSlider;
     private Label            speedLabel;
     private Label            blocksFilled;
@@ -172,6 +175,9 @@ public class LevelSelector extends Application {
         HBox  starRow  = buildStarRow();
         VBox.setMargin(starRow, new Insets(10, 0, 0, 0));
 
+        HBox  modeRow  = buildModeRow();
+        VBox.setMargin(modeRow, new Insets(10, 0, 0, 0));
+
         Separator div1 = divider();
         VBox.setMargin(div1, new Insets(20, 0, 18, 0));
 
@@ -191,7 +197,7 @@ public class LevelSelector extends Application {
 
         HBox launchRow = buildLaunchRow(stage);
 
-        VBox body = new VBox(heading, sub, levelRow, starRow, div1, speedRow, slider, blockBar, hints,
+        VBox body = new VBox(heading, sub, levelRow, starRow, modeRow, div1, speedRow, slider, blockBar, hints,
                              instancesSection, div2, launchRow);
         body.setPadding(new Insets(4, 28, 28, 28));
         body.setStyle("-fx-background-color:transparent;");
@@ -247,6 +253,21 @@ public class LevelSelector extends Application {
         Star[] stars = LEVELS[lvl].stars;
         if (star < 0 || star >= stars.length) return 1;
         return stars[star].id;
+    }
+
+    // ── Mode row (frontend only) ───────────────────────────────
+    private HBox buildModeRow() {
+        Label lbl = label("Modo", 12, TEXT2, false);
+        lbl.setMinWidth(54);
+        modeCombo = new ComboBox<>();
+        modeCombo.getItems().addAll("Entrenamiento", "Evaluación");
+        modeCombo.getSelectionModel().selectFirst();
+        modeCombo.setMaxWidth(Double.MAX_VALUE);
+        modeCombo.setAccessibleText("Modo de ejecución");
+        HBox.setHgrow(modeCombo, Priority.ALWAYS);
+        HBox row = new HBox(12, lbl, modeCombo);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 
     // ── Speed row ──────────────────────────────────────────────
@@ -306,7 +327,7 @@ public class LevelSelector extends Application {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        int maxCores = Runtime.getRuntime().availableProcessors();
+        int maxCores = Math.min(Runtime.getRuntime().availableProcessors(), 6);
         instancesSpinner = new Spinner<>(
             new SpinnerValueFactory.IntegerSpinnerValueFactory(1, maxCores, 1));
         instancesSpinner.setEditable(true);
@@ -355,6 +376,16 @@ public class LevelSelector extends Application {
     private HBox buildLaunchRow(Stage stage) {
         Label hint = label("Ready to launch.", 12, TEXT2, false);
         launchHint = hint;
+
+        renderToggle = new ToggleButton("⬜ Render");
+        renderToggle.setSelected(false);
+        renderToggle.setStyle(renderToggleStyle(false));
+        renderToggle.setAccessibleText("Activar o desactivar el renderizado del juego");
+        renderToggle.selectedProperty().addListener((obs, o, n) -> {
+            renderToggle.setText(n ? "⬛ Sin render" : "⬜ Render");
+            renderToggle.setStyle(renderToggleStyle(n));
+        });
+
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
@@ -373,19 +404,46 @@ public class LevelSelector extends Application {
             }
         });
 
-        HBox row = new HBox(12, hint, spacer, btn);
+        HBox row = new HBox(12, hint, renderToggle, spacer, btn);
         row.setAlignment(Pos.CENTER_LEFT);
         updateInstanceTexts(instanceCount());
         return row;
     }
 
     // ── Terminal pane ──────────────────────────────────────────
+    private void stopAllProcesses() {
+        synchronized (activeProcesses) {
+            for (Process p : activeProcesses) p.destroyForcibly();
+            activeProcesses.clear();
+        }
+        termAppend("[stopped all instances]");
+    }
+
     private VBox buildTerminalPane() {
         HBox header = new HBox();
         header.setPadding(new Insets(7, 14, 7, 14));
         header.setStyle("-fx-background-color:" + BORDER + ";");
         Label title = label("console output", 11, TEXT2, false);
-        header.getChildren().add(title);
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button stopBtn = new Button("Stop all");
+        stopBtn.setStyle(
+            "-fx-background-color:transparent; -fx-border-color:" + BORDER + ";" +
+            "-fx-text-fill:" + TEXT2 + "; -fx-font-family:monospace; -fx-font-size:11px;" +
+            "-fx-cursor:hand; -fx-padding:2 8 2 8; -fx-background-radius:4; -fx-border-radius:4;");
+        stopBtn.setOnMouseEntered(e -> stopBtn.setStyle(
+            "-fx-background-color:transparent; -fx-border-color:" + ACCENT + ";" +
+            "-fx-text-fill:" + TEXT1 + "; -fx-font-family:monospace; -fx-font-size:11px;" +
+            "-fx-cursor:hand; -fx-padding:2 8 2 8; -fx-background-radius:4; -fx-border-radius:4;"));
+        stopBtn.setOnMouseExited(e -> stopBtn.setStyle(
+            "-fx-background-color:transparent; -fx-border-color:" + BORDER + ";" +
+            "-fx-text-fill:" + TEXT2 + "; -fx-font-family:monospace; -fx-font-size:11px;" +
+            "-fx-cursor:hand; -fx-padding:2 8 2 8; -fx-background-radius:4; -fx-border-radius:4;"));
+        stopBtn.setOnAction(e -> stopAllProcesses());
+
+        header.getChildren().addAll(title, spacer, stopBtn);
 
         terminal = new TextArea();
         terminal.getStyleClass().add("term");
@@ -410,10 +468,12 @@ public class LevelSelector extends Application {
 
     private void runProcess(String courseId, double speed, int starId) {
         java.io.File binary = GameLauncher.findBinary();
+        boolean noRender = renderToggle != null && renderToggle.isSelected();
         String cmd = (binary != null ? binary.getAbsolutePath() : "sm64.us") +
                      " --level " + courseId +
                      " --speed " + String.format("%.1f", speed) +
-                     " --star "  + starId;
+                     " --star "  + starId +
+                     (noRender ? " --no-render" : "");
 
         termAppend("$ " + cmd);
 
@@ -424,14 +484,17 @@ public class LevelSelector extends Application {
 
         try {
             if (!binary.canExecute()) binary.setExecutable(true);
-            ProcessBuilder pb = new ProcessBuilder(
+            java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of(
                 binary.getAbsolutePath(),
                 "--level", courseId,
                 "--speed", String.format("%.1f", speed),
                 "--star",  String.valueOf(starId)
-            );
+            ));
+            if (noRender) args.add("--no-render");
+            ProcessBuilder pb = new ProcessBuilder(args);
             pb.redirectErrorStream(true);
             Process p = pb.start();
+            synchronized (activeProcesses) { activeProcesses.add(p); }
 
             Thread reader = new Thread(() -> {
                 try (var br = new java.io.BufferedReader(
@@ -442,8 +505,10 @@ public class LevelSelector extends Application {
                         Platform.runLater(() -> termAppend(ln));
                     }
                     int code = p.waitFor();
+                    synchronized (activeProcesses) { activeProcesses.remove(p); }
                     Platform.runLater(() -> termAppend("[exited with code " + code + "]"));
                 } catch (Exception e) {
+                    synchronized (activeProcesses) { activeProcesses.remove(p); }
                     Platform.runLater(() -> termAppend("[error] " + e.getMessage()));
                 }
             });
@@ -480,6 +545,16 @@ public class LevelSelector extends Application {
         return "-fx-font-family:monospace; -fx-font-size:16px; -fx-text-fill:" + color + ";" +
                "-fx-background-color:transparent; -fx-border-color:transparent;" +
                "-fx-cursor:hand; -fx-padding:0 4 2 4;";
+    }
+
+    private String renderToggleStyle(boolean selected) {
+        return "-fx-background-color:" + (selected ? SURF_H : SURFACE) + ";" +
+               "-fx-text-fill:" + (selected ? TEXT1 : TEXT2) + ";" +
+               "-fx-font-family:monospace; -fx-font-size:12px;" +
+               "-fx-border-color:" + BORDER + "; -fx-border-width:1;" +
+               "-fx-background-radius:6; -fx-border-radius:6;" +
+               "-fx-cursor:hand; -fx-padding:5 12 5 12;" +
+               "-fx-focus-color:transparent; -fx-faint-focus-color:transparent;";
     }
 
     private String launchStyle(String bg) {

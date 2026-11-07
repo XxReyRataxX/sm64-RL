@@ -163,7 +163,7 @@ Definidos en `include/sm64.h` via los includes de `include/ultra64/types.h`.
 | Comando canónico | `make version=us` |
 | Paralelo | `make -j$(nproc) version=us` |
 | Binario de salida | `build/us_pc/sm64.us` |
-| Directorio de trabajo | raíz del proyecto `/home/reyra/sm64-RL` |
+| Directorio de trabajo | raíz del proyecto `/home/reyrata/sm64-RL` |
 | VERSION por defecto | `us` |
 | Target Linux | `EXE = $(BUILD_DIR)/$(TARGET)` |
 | Makefile principal | `Makefile` (incluye `util.mk`, `Makefile.split`) |

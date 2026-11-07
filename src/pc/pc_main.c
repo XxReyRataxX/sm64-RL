@@ -46,6 +46,8 @@ s8 gShowDebugText;
 s8 gAutoStartLevelNum;
 s8 gAutoStartActNum = 1;
 float gSpeedMultiplier = 1.0f;
+// Headless mode: when 1 the dummy graphics backend is used (no window, no GPU)
+s8 gNoRender = 0;
 
 static struct AudioAPI *audio_api;
 static struct GfxWindowManagerAPI *wm_api;
@@ -162,6 +164,11 @@ void main_func(void) {
     request_anim_frame(on_anim_frame);
 #endif
 
+    if (gNoRender) {
+        // Headless mode (--no-render): no window, no GPU context.
+        rendering_api = &gfx_dummy_renderer_api;
+        wm_api = &gfx_dummy_wm_api;
+    } else {
 #if defined(ENABLE_DX12)
     rendering_api = &gfx_direct3d12_api;
     wm_api = &gfx_dxgi_api;
@@ -175,13 +182,14 @@ void main_func(void) {
     #else
         wm_api = &gfx_sdl;
     #endif
-#elif defined(ENABLE_GFX_DUMMY)
+#else
     rendering_api = &gfx_dummy_renderer_api;
     wm_api = &gfx_dummy_wm_api;
 #endif
+    }
 
-    gfx_init(wm_api, rendering_api, "Super Mario 64 PC-Port", configFullscreen);
-    
+    gfx_init(wm_api, rendering_api, "Super Mario 64 PC-Port", !gNoRender && configFullscreen);
+
     wm_api->set_fullscreen_changed_callback(on_fullscreen_changed);
     wm_api->set_keyboard_callbacks(keyboard_on_key_down, keyboard_on_key_up, keyboard_on_all_keys_up);
     
@@ -246,6 +254,8 @@ int main(int argc, char *argv[]) {
             gSpeedMultiplier = (float)atof(argv[++i]);
             if (gSpeedMultiplier < 1.0f) gSpeedMultiplier = 1.0f;
             if (gSpeedMultiplier > 5.0f) gSpeedMultiplier = 5.0f;
+        } else if (strcmp(argv[i], "--no-render") == 0) {
+            gNoRender = 1;
         }
     }
     main_func();

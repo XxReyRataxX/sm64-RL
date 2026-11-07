@@ -98,7 +98,7 @@ Nunca adivines tipos, macros, ni flags de linker.
 6. **Ejecutar** — editar archivos con Edit; nunca reescribir un archivo que solo necesita un patch.
 7. **Compilar** — preguntar: "¿Compilo ahora con `make version=us`?" y luego:
    ```bash
-   cd /home/reyra/sm64-RL && make version=us 2>&1 | tail -40
+   cd /home/reyrata/sm64-RL && make version=us 2>&1 | tail -40
    ```
    Si falla, leer el error, identificar el archivo, corregir, y volver a ejecutar.
 8. **Verificar** — confirmar que `build/us_pc/sm64.us` existe y es ejecutable.
@@ -140,7 +140,7 @@ Nunca adivines tipos, macros, ni flags de linker.
 ---
 
 ## Build Notes
-- **Comando canónico:** `make version=us` (siempre desde `/home/reyra/sm64-RL`).
+- **Comando canónico:** `make version=us` (siempre desde `/home/reyrata/sm64-RL`).
 - **Binario de salida:** `build/us_pc/sm64.us`
 - **Paralelo:** `make -j$(nproc) version=us`
 - Si faltan assets, hay que ejecutar `extract_assets.py` primero (no ejecutar automáticamente — confirmar con el usuario).

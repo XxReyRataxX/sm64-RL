@@ -1,9 +1,19 @@
-#ifdef ENABLE_GFX_DUMMY
+// Headless graphics backend. Always compiled: pc_main.c selects it at runtime
+// when the --no-render flag is passed, so the game can run without a window,
+// an X11/SDL video context or a GPU.
+
 #include <time.h>
 #include <errno.h>
 
+#if defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
+#endif
+
 #include "gfx_window_manager_api.h"
 #include "gfx_rendering_api.h"
+
+// Set from the --speed CLI argument (see src/pc/pc_main.c)
+extern float gSpeedMultiplier;
 
 static void gfx_dummy_wm_init(const char *game_name, bool start_in_fullscreen) {
 }
@@ -59,12 +69,21 @@ static struct timespec gfx_dummy_wm_timeadd(struct timespec t1, struct timespec 
 }
 
 static void gfx_dummy_wm_swap_buffers_end(void) {
+#if defined(_WIN32) || defined(_WIN64)
+    float spd = gSpeedMultiplier > 0.0f ? gSpeedMultiplier : 1.0f;
+    DWORD frame_ms = (DWORD)(1000.0f / (30.0f * spd));
+    if (frame_ms > 0) {
+        Sleep(frame_ms);
+    }
+#else
     static struct timespec prev;
+    float spd = gSpeedMultiplier > 0.0f ? gSpeedMultiplier : 1.0f;
+    long frame_ns = (long)(1000000000.0f / (30.0f * spd));
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     struct timespec diff = gfx_dummy_wm_timediff(t, prev);
-    if (diff.tv_sec == 0 && diff.tv_nsec < 1000000000 / 30) {
-        struct timespec add = {0, 1000000000 / 30};
+    if (diff.tv_sec == 0 && diff.tv_nsec < frame_ns) {
+        struct timespec add = {0, frame_ns};
         struct timespec next = gfx_dummy_wm_timeadd(prev, add);
         while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL) == EINTR) {
         }
@@ -72,6 +91,7 @@ static void gfx_dummy_wm_swap_buffers_end(void) {
     } else {
         prev = t;
     }
+#endif
 }
 
 static double gfx_dummy_wm_get_time(void) {
@@ -189,4 +209,3 @@ struct GfxRenderingAPI gfx_dummy_renderer_api = {
     gfx_dummy_renderer_end_frame,
     gfx_dummy_renderer_finish_render
 };
-#endif
