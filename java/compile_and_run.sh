@@ -21,4 +21,4 @@ pkill -f "java.*LevelSelector" 2>/dev/null
 sleep 0.3
 
 echo "Launching selector..."
-java --module-path "$JAVAFX_LIB" --add-modules "$MODS" LevelSelector
+java --module-path "$JAVAFX_LIB" --add-modules "$MODS" --enable-native-access=javafx.graphics LevelSelector

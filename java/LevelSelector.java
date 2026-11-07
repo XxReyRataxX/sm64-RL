@@ -41,7 +41,7 @@ public class LevelSelector extends Application {
 
     // ── Layout constants ───────────────────────────────────────
     private static final int W           = 480;
-    private static final int BASE_H      = 400;
+    private static final int BASE_H      = 468;
     private static final int TERM_H      = 160;
 
     // ── State ──────────────────────────────────────────────────
@@ -51,6 +51,9 @@ public class LevelSelector extends Application {
     private Label            speedLabel;
     private Label            blocksFilled;
     private Label            blocksEmpty;
+    private Spinner<Integer> instancesSpinner;
+    private Label            instancesHint;
+    private Label            launchHint;
     private TextArea         terminal;
     private VBox             terminalPane;
     private Rectangle        windowClip;
@@ -109,6 +112,22 @@ public class LevelSelector extends Application {
             "  -fx-pref-width:14px; -fx-pref-height:14px; -fx-effect:null; }\n" +
             ".slider .thumb:hover { -fx-border-color:" + ACCENT2 + "; }\n" +
             ".slider .axis { -fx-tick-label-fill:transparent; }\n" +
+            ".spinner { -fx-background-color:" + SURFACE + "; -fx-border-color:" + BORDER + ";" +
+            "  -fx-border-width:1; -fx-background-radius:4; -fx-border-radius:4;" +
+            "  -fx-focus-color:transparent; -fx-faint-focus-color:transparent; }\n" +
+            ".spinner .text-field { -fx-background-color:" + SURFACE + "; -fx-text-fill:" + TEXT1 + ";" +
+            "  -fx-font-family:monospace; -fx-font-size:13px; -fx-background-insets:0;" +
+            "  -fx-highlight-fill:" + BORDER + "; -fx-highlight-text-fill:" + TEXT1 + ";" +
+            "  -fx-prompt-text-fill:" + TEXT2 + "; }\n" +
+            ".spinner .increment-arrow-button,.spinner .decrement-arrow-button" +
+            "  { -fx-background-color:" + SURFACE + "; -fx-background-insets:0; }\n" +
+            ".spinner .increment-arrow-button:hover,.spinner .decrement-arrow-button:hover" +
+            "  { -fx-background-color:" + SURF_H + "; }\n" +
+            ".spinner .increment-arrow,.spinner .decrement-arrow" +
+            "  { -fx-background-color:" + TEXT2 + "; }\n" +
+            ".spinner .increment-arrow-button:hover .increment-arrow," +
+            ".spinner .decrement-arrow-button:hover .decrement-arrow" +
+            "  { -fx-background-color:" + ACCENT + "; }\n" +
             ".term { -fx-control-inner-background:" + TERM_BG + "; -fx-text-fill:" + TERM_TEXT + ";" +
             "  -fx-font-family:monospace; -fx-font-size:12px; -fx-background-color:" + TERM_BG + ";" +
             "  -fx-border-color:transparent; -fx-focus-color:transparent; -fx-faint-focus-color:transparent; }\n" +
@@ -164,12 +183,16 @@ public class LevelSelector extends Application {
         HBox hints     = buildSpeedHints();
         VBox.setMargin(hints, new Insets(4, 0, 0, 0));
 
+        VBox instancesSection = buildInstancesSection();
+        VBox.setMargin(instancesSection, new Insets(18, 0, 0, 0));
+
         Separator div2 = divider();
         VBox.setMargin(div2, new Insets(18, 0, 16, 0));
 
         HBox launchRow = buildLaunchRow(stage);
 
-        VBox body = new VBox(heading, sub, levelRow, starRow, div1, speedRow, slider, blockBar, hints, div2, launchRow);
+        VBox body = new VBox(heading, sub, levelRow, starRow, div1, speedRow, slider, blockBar, hints,
+                             instancesSection, div2, launchRow);
         body.setPadding(new Insets(4, 28, 28, 28));
         body.setStyle("-fx-background-color:transparent;");
         return body;
@@ -277,9 +300,61 @@ public class LevelSelector extends Application {
         return new HBox(lo, sp, hi);
     }
 
+    // ── Instances section ──────────────────────────────────────
+    private VBox buildInstancesSection() {
+        Label lbl = label("Lanzamientos", 12, TEXT2, false);
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        int maxCores = Runtime.getRuntime().availableProcessors();
+        instancesSpinner = new Spinner<>(
+            new SpinnerValueFactory.IntegerSpinnerValueFactory(1, maxCores, 1));
+        instancesSpinner.setEditable(true);
+        instancesSpinner.setPrefWidth(80);
+        instancesSpinner.setMinWidth(80);
+        instancesSpinner.setMaxWidth(80);
+        instancesSpinner.setAccessibleText("Number of parallel game instances to launch");
+        // Commit manually typed text when the editor loses focus
+        instancesSpinner.focusedProperty().addListener((obs, was, is) -> {
+            if (!is) instancesSpinner.increment(0);
+        });
+        instancesSpinner.valueProperty().addListener(
+            (obs, o, n) -> updateInstanceTexts(n == null ? 1 : n));
+
+        HBox top = new HBox(12, lbl, spacer, instancesSpinner);
+        top.setAlignment(Pos.CENTER_LEFT);
+
+        instancesHint = label("1 instancia  (máx. " + maxCores + ")", 11, TEXT2, false);
+        HBox hintRow = new HBox(instancesHint);
+        hintRow.setAlignment(Pos.CENTER_RIGHT);
+        VBox.setMargin(hintRow, new Insets(5, 0, 0, 0));
+
+        VBox box = new VBox(top, hintRow);
+        box.setStyle("-fx-background-color:transparent;");
+        return box;
+    }
+
+    private int instanceCount() {
+        if (instancesSpinner == null) return 1;
+        Integer v = instancesSpinner.getValue();
+        return v == null ? 1 : Math.max(1, v);
+    }
+
+    private void updateInstanceTexts(int n) {
+        if (instancesHint != null) {
+            int max = Runtime.getRuntime().availableProcessors();
+            String suffix = "  (máx. " + max + ")";
+            instancesHint.setText(n == 1 ? "1 instancia" + suffix : n + " instancias en paralelo" + suffix);
+        }
+        if (launchHint != null) {
+            launchHint.setText(n == 1 ? "Ready to launch." : "Launching " + n + " instances.");
+        }
+    }
+
     // ── Launch row ─────────────────────────────────────────────
     private HBox buildLaunchRow(Stage stage) {
         Label hint = label("Ready to launch.", 12, TEXT2, false);
+        launchHint = hint;
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
@@ -291,12 +366,16 @@ public class LevelSelector extends Application {
             int idx    = levelCombo.getSelectionModel().getSelectedIndex();
             int starId = selectedStarId();
             double spd = speedSlider.getValue() / 10.0;
+            int    n   = instanceCount();
             revealTerminal(stage);
-            runProcess(LEVELS[idx].courseId, spd, starId);
+            for (int i = 0; i < n; i++) {
+                runProcess(LEVELS[idx].courseId, spd, starId);
+            }
         });
 
         HBox row = new HBox(12, hint, spacer, btn);
         row.setAlignment(Pos.CENTER_LEFT);
+        updateInstanceTexts(instanceCount());
         return row;
     }
 
