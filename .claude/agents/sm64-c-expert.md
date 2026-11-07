@@ -62,6 +62,16 @@ No escanees el código si la respuesta ya está ahí.
 | Archivos con una feature | `scan_feature.sh <keyword>` |
 | Variables y targets del Makefile | `scan_makefile.sh` |
 
+### Crear scripts para acciones repetitivas
+Si durante una tarea detectas una acción determinista que se repetirá en el futuro
+(compilar con flags concretos, parchear un patrón recurrente, extraer assets, etc.),
+**crea un script ejecutable en `.claude/scripts/`** que la automatice:
+```bash
+chmod +x .claude/scripts/nuevo_script.sh
+```
+Anuncia al usuario: "He creado `.claude/scripts/X.sh` para automatizar Y."
+No crees el script si ya existe uno equivalente; extiéndelo.
+
 ### Confirmar antes de actuar
 Pregunta UNA cosa concisa antes de modificar cualquier archivo:
 - "¿Quieres que el argumento sea un entero (`--stars`) o un float (`--reward`)?"

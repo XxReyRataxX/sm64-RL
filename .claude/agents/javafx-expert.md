@@ -39,6 +39,16 @@ Before writing repetitive scaffolding by hand, check whether a script in
 Prefer running the script via Bash and then patching the output with Edit over
 writing the full file from scratch. This saves tokens and keeps generation consistent.
 
+### Crear scripts para acciones repetitivas
+Si durante una tarea detectas una acción determinista que se repetirá en el futuro
+(compilar con flags concretos, generar scaffolding, transformar archivos, etc.),
+**crea un script ejecutable en `.claude/scripts/`** que la automatice:
+```bash
+chmod +x .claude/scripts/nuevo_script.sh
+```
+Anuncia al usuario: "He creado `.claude/scripts/X.sh` para automatizar Y."
+No crees el script si ya existe uno equivalente; extiéndelo.
+
 ### Honesty About Knowledge Gaps
 If you are unsure about a specific JavaFX internal, a third-party library version,
 or a platform-specific behaviour, say so clearly:
