@@ -6,10 +6,19 @@ import numpy as np
 
 
 class Actions(Enum):
-    right = 0
-    up = 1
-    left = 2
-    down = 3
+    key_a = 0
+    key_b = 1
+    key_start = 2
+    key_r = 3
+    key_z = 4
+    key_cup = 5
+    key_cdown = 6
+    key_cleft = 7
+    key_cright = 8
+    key_stickup = 9
+    key_stickdown = 10
+    key_stickleft = 11
+    key_stickright = 12
 
 
 class SM64_env(gym.Env):
@@ -29,19 +38,17 @@ class SM64_env(gym.Env):
             }
         )
 
-        # We have 4 actions, corresponding to "right", "up", "left", "down", "right"
-        self.action_space = spaces.Discrete(4)
+        self.action_space = spaces.Discrete(len(Actions))
 
         """
         The following dictionary maps abstract actions from `self.action_space` to 
         the direction we will walk in if that action is taken.
-        i.e. 0 corresponds to "right", 1 to "up" etc.
+        Stick actions move through the grid; button and camera actions leave
+        the position unchanged.
         """
         self._action_to_direction = {
-            Actions.right.value: np.array([1, 0]),
-            Actions.up.value: np.array([0, 1]),
-            Actions.left.value: np.array([-1, 0]),
-            Actions.down.value: np.array([0, -1]),
+            action.value: action.name
+            for action in Actions
         }
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
