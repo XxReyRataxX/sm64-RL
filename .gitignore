@@ -54,8 +54,7 @@ build/*
 sm64_save_file.bin
 sm64config.txt
 
-#gymnasium precommit config
-*.yaml
+
 
 # Assets. Generally ignored, but ones with "custom" in the name are fine.
 /levels/**/*.png
