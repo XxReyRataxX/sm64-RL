@@ -8,17 +8,11 @@ import numpy as np
 class Actions(Enum):
     key_a = 0
     key_b = 1
-    key_start = 2
-    key_r = 3
-    key_z = 4
-    key_cup = 5
-    key_cdown = 6
-    key_cleft = 7
-    key_cright = 8
-    key_stickup = 9
-    key_stickdown = 10
-    key_stickleft = 11
-    key_stickright = 12
+    key_z = 2
+    key_stickup = 3
+    key_stickdown = 4
+    key_stickleft = 5
+    key_stickright = 6
 
 
 class SM64_env(gym.Env):
