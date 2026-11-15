@@ -13,6 +13,8 @@ class Actions(Enum):
     key_stickdown = 4
     key_stickleft = 5
     key_stickright = 6
+    key_camleft = 7
+    key_camright = 8
 
 
 class SM64_env(gym.Env):
