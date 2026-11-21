@@ -52,7 +52,6 @@ struct RLStateShm {
 
     // --- Sincronización para step(): Python escribe aquí ---
     uint32_t actionBits;     // bitmask de la acción que Python quiere ejecutar
-    uint32_t requestedFrame; // frame al que corresponde la acción
 };
 
 // -----------------------------------------------------------------------------
