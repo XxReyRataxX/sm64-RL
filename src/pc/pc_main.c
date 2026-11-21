@@ -31,6 +31,8 @@
 
 #include "configfile.h"
 
+#include "rl_state.h"
+
 #include "compat.h"
 
 #define CONFIG_FILE "sm64config.txt"
@@ -48,6 +50,10 @@ s8 gAutoStartActNum = 1;
 float gSpeedMultiplier = 1.0f;
 // Headless mode: when 1 the dummy graphics backend is used (no window, no GPU)
 s8 gNoRender = 0;
+
+// RL state export (--state-shm <name> / --state-sync)
+static const char *sRLShmName = NULL;
+static int sRLSyncMode = 0;
 
 static struct AudioAPI *audio_api;
 static struct GfxWindowManagerAPI *wm_api;
@@ -101,8 +107,14 @@ void produce_one_frame(void) {
     }
     //printf("Audio samples before submitting: %d\n", audio_api->buffered());
     audio_api->play((u8 *)audio_buffer, 2 * num_audio_samples * 4);
-    
+
     gfx_end_frame();
+
+    // RL hook: publicar el estado del juego en memoria compartida. En modo
+    // --state-sync esta llamada bloquea hasta que el agente envia una accion.
+    if (sRLShmName != NULL) {
+        rl_state_publish();
+    }
 }
 
 #ifdef TARGET_WEB
@@ -220,6 +232,14 @@ void main_func(void) {
     audio_init();
     sound_init();
 
+    // RL state export: inicializar la shm antes de entrar al game loop.
+    if (sRLShmName != NULL) {
+        if (rl_state_init(sRLShmName, sRLSyncMode) != 0) {
+            // Si falla, seguimos sin export en lugar de abortar el episodio.
+            sRLShmName = NULL;
+        }
+    }
+
     thread5_game_loop(NULL);
 #ifdef TARGET_WEB
     /*for (int i = 0; i < atoi(argv[1]); i++) {
@@ -253,9 +273,13 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--speed") == 0 && i + 1 < argc) {
             gSpeedMultiplier = (float)atof(argv[++i]);
             if (gSpeedMultiplier < 1.0f) gSpeedMultiplier = 1.0f;
-            if (gSpeedMultiplier > 5.0f) gSpeedMultiplier = 5.0f;
+            if (gSpeedMultiplier > 100.0f) gSpeedMultiplier = 100.0f;
         } else if (strcmp(argv[i], "--no-render") == 0) {
             gNoRender = 1;
+        } else if (strcmp(argv[i], "--state-shm") == 0 && i + 1 < argc) {
+            sRLShmName = argv[++i];
+        } else if (strcmp(argv[i], "--state-sync") == 0) {
+            sRLSyncMode = 1;
         }
     }
     main_func();

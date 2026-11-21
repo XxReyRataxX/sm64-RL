@@ -5,6 +5,9 @@
 
 #include "controller_recorded_tas.h"
 #include "controller_keyboard.h"
+#include "controller_rl.h"
+
+#include "../rl_state.h"
 
 #if defined(_WIN32) || defined(_WIN64)
 #include "controller_xinput.h"
@@ -17,6 +20,7 @@
 #endif
 
 static struct ControllerAPI *controller_implementations[] = {
+    &controller_rl,
     &controller_recorded_tas,
 #if defined(_WIN32) || defined(_WIN64)
     &controller_xinput,
@@ -46,6 +50,14 @@ void osContGetReadData(OSContPad *pad) {
     pad->stick_x = 0;
     pad->stick_y = 0;
     pad->errnum = 0;
+
+    // En modo RL el agente es la única fuente de input: se lee solo su backend
+    // y se corta aquí, para que teclado/gamepad/TAS no puedan inyectar botones
+    // por encima (los demás backends hacen OR sobre pad->button).
+    if (gRLActive) {
+        controller_rl.read(pad);
+        return;
+    }
 
     for (size_t i = 0; i < sizeof(controller_implementations) / sizeof(struct ControllerAPI *); i++) {
         controller_implementations[i]->read(pad);
