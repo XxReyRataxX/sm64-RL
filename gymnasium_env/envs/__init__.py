@@ -1,1 +1,1 @@
-from gymnasium_env.envs.grid_world import SM64_env
+from gymnasium_env.envs.killer import SM64KillerEnv

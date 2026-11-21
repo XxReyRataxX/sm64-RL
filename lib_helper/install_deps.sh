@@ -27,6 +27,10 @@ sudo apt-get install -y \
     xdotool
 
 echo ""
+echo "==> Installing Python RL dependencies..."
+pip install posix-ipc gymnasium numpy
+
+echo ""
 echo "==> All dependencies installed."
 echo "    Build the game with:  make VERSION=us -j\$(nproc)"
 echo "    Launch the selector:  cd java && ./compile_and_run.sh"
