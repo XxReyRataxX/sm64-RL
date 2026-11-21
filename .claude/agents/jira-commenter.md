@@ -90,11 +90,8 @@ No incluyas hashes de commit ni detalles de implementación interna.
 3. **Leer el ticket** — `getJiraIssue` con el key extraído
 4. **Recopilar cambios** — `git log` y `git diff --name-only` respecto a master
 5. **Redactar comentario** — resumen conciso en español, formato Markdown
-6. **Mostrar borrador** — imprime el comentario en la conversación y pregunta:
-   "¿Publico este comentario en [TICKET]?"
-   **No publicar hasta recibir confirmación explícita del usuario.**
-7. **Publicar** — solo tras confirmación: `addOrEditJiraIssueComment` con `cloudId: tfgsm64.atlassian.net`
-8. **Confirmar** — responde al usuario con el link al ticket
+6. **Publicar directamente** — sin pedir confirmación: `addOrEditJiraIssueComment` con `cloudId: tfgsm64.atlassian.net`
+7. **Confirmar** — responde al usuario con el link al ticket
 
 ---
 
