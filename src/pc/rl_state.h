@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 #define RL_STATE_MAGIC   0x534D3634u  // 'S','M','6','4'
-#define RL_STATE_VERSION 1u
+#define RL_STATE_VERSION 2u
 
 // Nombres de los objetos POSIX (se les concatena el <name> pasado por CLI).
 #define RL_SHM_PREFIX        "/sm64_state_"
@@ -23,7 +23,6 @@
 struct RLStateShm {
     uint32_t magic;          // RL_STATE_MAGIC
     uint32_t version;        // RL_STATE_VERSION
-    uint32_t seq;            // seqlock: impar = escritura en curso
     uint32_t frame;          // gGlobalTimer
 
     float    pos[3];         // gMarioState->pos
@@ -79,7 +78,7 @@ extern int8_t   gRLStickY;
 // Devuelve 0 en éxito, -1 en error (el juego sigue corriendo sin export).
 int  rl_state_init(const char *name, int sync_mode);
 
-// Publica el estado actual (seqlock). En modo sync: sem_post(state) y luego
+// Publica el estado actual en la shm. En modo sync: sem_post(state) y luego
 // sem_wait(action), aplicando `actionBits` a los globals gRL*.
 void rl_state_publish(void);
 
