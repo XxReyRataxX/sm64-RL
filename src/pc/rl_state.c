@@ -1,8 +1,8 @@
 // -----------------------------------------------------------------------------
 // rl_state.c — Implementación del export de estado a memoria compartida POSIX.
 //
-// Protocolo de lectura para Python (seqlock):
-//   do { s1 = seq; if (s1 & 1) continue; <copiar struct>; s2 = seq; } while (s1 != s2);
+// El estado se publica entre barreras de memoria; la sincronizacion con Python la
+// dan los semaforos del modo --state-sync (no hay protocolo de polling).
 // -----------------------------------------------------------------------------
 
 #include <stdint.h>
@@ -116,7 +116,6 @@ int rl_state_init(const char *name, int sync_mode) {
     memset(sShm, 0, sizeof(struct RLStateShm));
     sShm->magic   = RL_STATE_MAGIC;
     sShm->version = RL_STATE_VERSION;
-    sShm->seq     = 0;
 
     if (sync_mode) {
         // Arrancamos los dos semáforos a 0: el juego publica el primer estado y
@@ -156,11 +155,6 @@ void rl_state_publish(void) {
     }
 
     struct MarioState *m = gMarioState;
-
-    // --- seqlock: entrar en escritura (seq impar) ---
-    RL_FENCE();
-    sShm->seq++;
-    RL_FENCE();
 
     sShm->frame = (uint32_t)gGlobalTimer;
 
@@ -207,9 +201,7 @@ void rl_state_publish(void) {
         sShm->inLevel = 0;
     }
 
-    // --- seqlock: salir de escritura (seq par) ---
-    RL_FENCE();
-    sShm->seq++;
+    // Asegura que todas las escrituras del estado sean visibles antes del post.
     RL_FENCE();
 
     if (!sSyncMode) {

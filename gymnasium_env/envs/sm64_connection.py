@@ -17,21 +17,25 @@ import posix_ipc
 # ---------------------------------------------------------------------------
 # Layout del struct RLStateShm  (src/pc/rl_state.h)
 #
-# uint32 magic, version, seq, frame
+# uint32 magic, version, frame
 # float  pos[3], vel[3], forwardVel
 # int32  faceAngle[3]
 # uint32 action, prevAction, actionState, actionTimer
 # int32  numCoins, health, floorAngle
 # uint32 flags, input
 # uint8  isDead, starCollected, inLevel, inAir
-# uint32 actionBits, requestedFrame
+# uint32 actionBits
+#
+# No hay seqlock: la sincronizacion la dan los semaforos POSIX (--state-sync),
+# que garantizan que el struct ya esta escrito por completo cuando Python lee.
 # ---------------------------------------------------------------------------
-SHM_FMT  = '<IIIIfffffffiiiIIIIiiiIIBBBBI'
+SHM_FMT  = '<IIIfffffffiiiIIIIiiiIIBBBBI'
 SHM_SIZE = struct.calcsize(SHM_FMT)
 SHM_MAGIC = 0x534D3634  # 'SM64'
+SHM_VERSION = 2         # RL_STATE_VERSION en src/pc/rl_state.h
 
 _FIELDS = [
-    'magic', 'version', 'seq', 'frame',
+    'magic', 'version', 'frame',
     'pos0', 'pos1', 'pos2',
     'vel0', 'vel1', 'vel2',
     'forwardVel',
@@ -45,20 +49,16 @@ _FIELDS = [
 _IDX = {name: i for i, name in enumerate(_FIELDS)}
 
 # Offset en bytes de actionBits dentro del struct
-ACTIONBITS_OFFSET = struct.calcsize('<IIIIfffffffiiiIIIIiiiIIBBBB')
+ACTIONBITS_OFFSET = struct.calcsize('<IIIfffffffiiiIIIIiiiIIBBBB')
 
 
 def read_state(buf) -> dict:
-    """Lee el estado del juego con reintentos de seqlock."""
-    for _ in range(200):
-        raw = bytes(buf[:SHM_SIZE])
-        vals = struct.unpack_from(SHM_FMT, raw)
-        seq1 = vals[_IDX['seq']]
-        if seq1 & 1:
-            continue  # escritura en curso, reintentar
-        vals2 = struct.unpack_from(SHM_FMT, bytes(buf[:SHM_SIZE]))
-        if vals2[_IDX['seq']] == seq1:
-            return {name: vals2[i] for i, name in enumerate(_FIELDS)}
+    """Lee el estado del juego desde la shm.
+
+    Lectura directa: el semaforo `state` solo se postea despues de que C haya
+    terminado de escribir el struct, asi que nunca se observa a medio escribir.
+    """
+    vals = struct.unpack_from(SHM_FMT, bytes(buf[:SHM_SIZE]))
     return {name: vals[i] for i, name in enumerate(_FIELDS)}
 
 
@@ -109,6 +109,15 @@ class SM64Connection:
 
         self._buf = mmap.mmap(self._shm_obj.fd, SHM_SIZE)
         self._shm_obj.close_fd()
+
+        head = read_state(self._buf)
+        if head['magic'] != SHM_MAGIC or head['version'] != SHM_VERSION:
+            self.close()
+            raise RuntimeError(
+                f"ABI de shm incompatible: magic=0x{head['magic']:08X}, "
+                f"version={head['version']} (esperado 0x{SHM_MAGIC:08X}/{SHM_VERSION}). "
+                "Recompila el juego con `make version=us`."
+            )
 
         self._state_sem  = posix_ipc.Semaphore(f'/sm64_state_{self.shm_name}')
         self._action_sem = posix_ipc.Semaphore(f'/sm64_action_{self.shm_name}')
