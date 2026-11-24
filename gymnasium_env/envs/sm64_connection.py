@@ -71,11 +71,19 @@ class SM64Connection:
     """Gestiona el ciclo de vida del proceso del juego y la shm."""
 
     def __init__(self, shm_name: str, game_binary: str,
-                 extra_args: list = None, timeout: float = 2.0):
-        self.shm_name    = shm_name
-        self.game_binary = game_binary
-        self.extra_args  = extra_args or []
-        self.timeout     = timeout
+                 extra_args: list = None, timeout: float = 2.0,
+                 startup_timeout: float = 15.0):
+        self.shm_name        = shm_name
+        self.game_binary     = game_binary
+        self.extra_args      = extra_args or []
+        self.timeout         = timeout
+        self.startup_timeout = startup_timeout
+
+        # Nombres de los objetos POSIX (deben coincidir con los prefijos de
+        # src/pc/rl_state.h: RL_SHM_PREFIX / RL_*_SEM_PREFIX).
+        self._shm_path        = f'/sm64_state_{shm_name}'
+        self._state_sem_path  = f'/sm64_state_{shm_name}'
+        self._action_sem_path = f'/sm64_action_{shm_name}'
 
         self._proc      = None
         self._shm_obj   = None
@@ -86,7 +94,15 @@ class SM64Connection:
     # ------------------------------------------------------------------
 
     def launch(self):
-        """Lanza el juego y espera a que la shm esté lista."""
+        """Lanza el juego y espera a que la shm esté publicada.
+
+        El juego crea la shm con `shm_open`, que la deja a tamaño 0 antes del
+        `ftruncate` y del `memset`, y solo despues crea los semaforos. Por eso
+        NO basta con esperar a que el fichero exista: C escribe `magic` como
+        ULTIMA operacion de su init (ver el contrato en src/pc/rl_state.c), asi
+        que `magic == SHM_MAGIC` es la unica senal fiable de "todo listo":
+        tamanio final + struct inicializado + semaforos creados.
+        """
         args = [
             self.game_binary,
             '--no-render',
@@ -96,41 +112,120 @@ class SM64Connection:
 
         self._proc = subprocess.Popen(args)
 
-        shm_path = f'/sm64_state_{self.shm_name}'
-        for _ in range(50):
-            try:
-                self._shm_obj = posix_ipc.SharedMemory(shm_path)
-                break
-            except posix_ipc.ExistentialError:
-                time.sleep(0.1)
-        else:
-            self._proc.terminate()
-            raise RuntimeError(f"Timeout esperando shm {shm_path}")
+        try:
+            head = self._wait_for_shm()
+        except Exception:
+            self.close()
+            raise
 
-        self._buf = mmap.mmap(self._shm_obj.fd, SHM_SIZE)
-        self._shm_obj.close_fd()
-
-        head = read_state(self._buf)
-        if head['magic'] != SHM_MAGIC or head['version'] != SHM_VERSION:
+        if head['version'] != SHM_VERSION:
             self.close()
             raise RuntimeError(
-                f"ABI de shm incompatible: magic=0x{head['magic']:08X}, "
-                f"version={head['version']} (esperado 0x{SHM_MAGIC:08X}/{SHM_VERSION}). "
-                "Recompila el juego con `make version=us`."
+                f"ABI de shm incompatible: version={head['version']} "
+                f"(esperado {SHM_VERSION}). Recompila el juego con "
+                "`make version=us`."
             )
 
-        self._state_sem  = posix_ipc.Semaphore(f'/sm64_state_{self.shm_name}')
-        self._action_sem = posix_ipc.Semaphore(f'/sm64_action_{self.shm_name}')
+        # Garantizado por el contrato de `magic`: si la shm esta publicada, los
+        # semaforos ya existen, asi que estas dos aperturas no pueden competir
+        # con la creacion en C.
+        self._state_sem  = posix_ipc.Semaphore(self._state_sem_path)
+        self._action_sem = posix_ipc.Semaphore(self._action_sem_path)
+
+    def _wait_for_shm(self) -> dict:
+        """Hace polling hasta que la shm esta publicada (`magic` escrito).
+
+        Reintenta el ciclo completo abrir + mapear + leer `magic`, porque cada
+        paso puede caer en una ventana distinta del init de C:
+          - antes del ftruncate : la shm mide 0 bytes y el mmap falla
+          - antes del memset    : el mapeo funciona pero magic todavia vale 0
+        """
+        deadline = time.monotonic() + self.startup_timeout
+        while time.monotonic() < deadline:
+            if self._proc.poll() is not None:
+                raise RuntimeError(
+                    f"El juego murio durante el arranque "
+                    f"(codigo {self._proc.returncode}) sin publicar "
+                    f"{self._shm_path}"
+                )
+
+            try:
+                shm_obj = posix_ipc.SharedMemory(self._shm_path)
+            except posix_ipc.ExistentialError:
+                time.sleep(0.02)   # C aun no ha llegado al shm_open
+                continue
+
+            try:
+                buf = mmap.mmap(shm_obj.fd, SHM_SIZE)
+            except ValueError:
+                # La shm existe pero C aun no ha hecho ftruncate: mide 0 bytes.
+                time.sleep(0.02)
+                continue
+            finally:
+                shm_obj.close_fd()
+
+            head = read_state(buf)
+            if head['magic'] != SHM_MAGIC:
+                # Mapeada pero sin publicar todavia (magic sigue a 0).
+                buf.close()
+                time.sleep(0.02)
+                continue
+
+            self._shm_obj = shm_obj
+            self._buf     = buf
+            return head
+
+        raise RuntimeError(
+            f"Timeout de {self.startup_timeout}s esperando a que el juego "
+            f"publique {self._shm_path}"
+        )
 
     def close(self):
-        """Cierra la conexión y termina el proceso."""
-        if self._buf:
+        """Cierra la conexión, termina el proceso y limpia los objetos POSIX."""
+        if self._buf is not None:
             self._buf.close()
             self._buf = None
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
-            self._proc.wait(timeout=3)
+        self._shm_obj = None
+
+        for sem in (self._state_sem, self._action_sem):
+            if sem is not None:
+                try:
+                    sem.close()
+                except posix_ipc.Error:
+                    pass
+        self._state_sem  = None
+        self._action_sem = None
+
+        if self._proc is not None:
+            if self._proc.poll() is None:
+                # El juego instala un handler de SIGTERM que limpia la shm y
+                # los semaforos; le damos margen para que corra.
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    self._proc.wait(timeout=3)
             self._proc = None
+
+        # Cinturon y tirantes: si el juego murio por SIGKILL no corrio ningun
+        # handler, y un semaforo huerfano conserva su contador. `sem_open` con
+        # O_CREAT ignora el valor inicial si el objeto ya existe, asi que el
+        # run siguiente heredaria ese contador y el handshake se
+        # desincronizaria en silencio. Mejor desvincular aqui tambien.
+        self._unlink_ipc()
+
+    def _unlink_ipc(self):
+        """Desvincula shm y semaforos. Idempotente: si ya no estan, no pasa nada."""
+        try:
+            posix_ipc.unlink_shared_memory(self._shm_path)
+        except posix_ipc.ExistentialError:
+            pass
+        for path in (self._state_sem_path, self._action_sem_path):
+            try:
+                posix_ipc.unlink_semaphore(path)
+            except posix_ipc.ExistentialError:
+                pass
 
     def is_alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
@@ -138,9 +233,19 @@ class SM64Connection:
     # ------------------------------------------------------------------
 
     def wait_state(self) -> dict:
-        """Bloquea hasta recibir nuevo estado del juego."""
+        """Bloquea hasta recibir nuevo estado del juego.
+
+        Lanza RuntimeError si el juego murio: su shutdown pone `magic` a 0 antes
+        del munmap, y nuestro mapeo sobrevive al shm_unlink, asi que sin ese
+        check leeriamos datos rancios indefinidamente.
+        """
         self._state_sem.acquire(timeout=self.timeout)
-        return read_state(self._buf)
+        s = read_state(self._buf)
+        if s['magic'] != SHM_MAGIC:
+            raise RuntimeError(
+                "El juego cerro la shm (magic=0): el proceso ha terminado."
+            )
+        return s
 
     def send_action(self, action_bits: int):
         """Envía una acción al juego y lo desbloquea."""

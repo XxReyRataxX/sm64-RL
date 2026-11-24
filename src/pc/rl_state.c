@@ -15,6 +15,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <semaphore.h>
+#include <signal.h>
 
 #include "sm64.h"
 
@@ -72,6 +73,18 @@ static int action_in_set(uint32_t actionId, const uint32_t *set, size_t count) {
 // <stdatomic.h>, que choca con algunos shims del SDK de N64 en este codebase.
 #define RL_FENCE() __sync_synchronize()
 
+// --- Handler de señales ------------------------------------------------------
+// Limpia la shm y los semáforos cuando el proceso recibe SIGTERM/SIGINT.
+// rl_state_shutdown() es idempotente (sShutdownDone), así que es seguro llamarlo
+// aquí aunque también esté registrado en atexit().
+//
+// Salimos con _exit() y no con exit(): exit() ejecutaría los atexit desde el
+// contexto de la señal (reentrancia) y no es async-signal-safe. _exit() sí lo es.
+static void rl_signal_handler(int sig) {
+    rl_state_shutdown();
+    _exit(128 + sig);
+}
+
 // --- API ---------------------------------------------------------------------
 
 int rl_state_init(const char *name, int sync_mode) {
@@ -113,23 +126,51 @@ int rl_state_init(const char *name, int sync_mode) {
     close(sShmFd);
     sShmFd = -1;
 
+    // magic se queda deliberadamente en 0 aqui: se publica al final del init.
     memset(sShm, 0, sizeof(struct RLStateShm));
-    sShm->magic   = RL_STATE_MAGIC;
     sShm->version = RL_STATE_VERSION;
 
     if (sync_mode) {
         // Arrancamos los dos semáforos a 0: el juego publica el primer estado y
         // hace post antes de esperar la primera acción.
-        sStateSem  = sem_open(sStateSemPath,  O_CREAT, 0600, 0);
-        sActionSem = sem_open(sActionSemPath, O_CREAT, 0600, 0);
-        if (sStateSem == SEM_FAILED || sActionSem == SEM_FAILED) {
-            fprintf(stderr, "[rl_state] sem_open fallo: %s\n", strerror(errno));
+        //
+        // sem_open() con O_CREAT sobre un semáforo que YA existe ignora el valor
+        // inicial (comportamiento POSIX). Si un run anterior murió por señal sin
+        // limpiar, heredaríamos su contador (>0), sem_wait() no bloquearía y el
+        // handshake con Python se desincronizaría en silencio. Por eso borramos
+        // cualquier resto y creamos con O_EXCL: así el contador arranca a 0 de
+        // forma garantizada o el init falla de forma ruidosa.
+        sem_unlink(sStateSemPath);   // ENOENT es el caso normal: se ignora
+        sem_unlink(sActionSemPath);
+
+        int semErr = 0;
+        sStateSem = sem_open(sStateSemPath, O_CREAT | O_EXCL, 0600, 0);
+        if (sStateSem == SEM_FAILED) {
+            semErr = errno;
+        } else {
+            sActionSem = sem_open(sActionSemPath, O_CREAT | O_EXCL, 0600, 0);
+            if (sActionSem == SEM_FAILED) {
+                semErr = errno;
+            }
+        }
+
+        if (semErr != 0) {
+            if (semErr == EEXIST) {
+                // Carrera con otra instancia usando el mismo <name>. No caemos a
+                // O_CREAT sin O_EXCL: sería heredar un contador desconocido.
+                fprintf(stderr, "[rl_state] el nombre '%s' ya esta en uso por otra "
+                                "instancia (semaforos existentes): usa otro nombre\n", name);
+            } else {
+                fprintf(stderr, "[rl_state] sem_open fallo: %s\n", strerror(semErr));
+            }
             if (sStateSem != SEM_FAILED) {
                 sem_close(sStateSem);
+                sem_unlink(sStateSemPath);
                 sStateSem = SEM_FAILED;
             }
             if (sActionSem != SEM_FAILED) {
                 sem_close(sActionSem);
+                sem_unlink(sActionSemPath);
                 sActionSem = SEM_FAILED;
             }
             munmap(sShm, sizeof(struct RLStateShm));
@@ -141,8 +182,40 @@ int rl_state_init(const char *name, int sync_mode) {
         gRLSyncActive = 1;
     }
 
+    // -------------------------------------------------------------------------
+    // (2) BARRERA DE PUBLICACION — CONTRATO CON PYTHON. NO MOVER ESTA LINEA.
+    //
+    // `magic` tiene que ser LA ULTIMA escritura del init. El invariante que usa
+    // el lado Python para saber que puede mapear y leer la shm es:
+    //
+    //     magic == RL_STATE_MAGIC  =>  la shm tiene su tamaño final (ftruncate
+    //                                  hecho), está inicializada (memset+version)
+    //                                  y los semáforos ya existen.
+    //
+    // shm_open() crea el objeto con tamaño 0 antes del ftruncate, así que si
+    // `magic` se escribiera antes Python podría mapear una shm truncada o
+    // esperar semáforos que aún no existen. Si el init falla a mitad, `magic`
+    // debe quedarse en 0: nunca lo asignes antes de este punto.
+    // -------------------------------------------------------------------------
+    RL_FENCE();
+    sShm->magic = RL_STATE_MAGIC;
+
     gRLActive = 1;
     atexit(rl_state_shutdown);
+
+    // (4) El juego acaba en un while(1) y siempre muere por señal (SIGTERM del
+    // launcher, SIGINT de Ctrl+C), y las señales no ejecutan los atexit. Sin este
+    // handler la shm y los semáforos quedan huérfanos en el kernel en cada run.
+    // Se instala solo en caso de éxito para no alterar el juego en modo normal.
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = rl_signal_handler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGTERM, &sa, NULL);
+        sigaction(SIGINT,  &sa, NULL);
+    }
 
     fprintf(stderr, "[rl_state] shm %s lista (%zu bytes, sync=%d)\n",
             sShmPath, sizeof(struct RLStateShm), sSyncMode);
@@ -240,6 +313,10 @@ void rl_state_shutdown(void) {
     gRLSyncActive = 0;
 
     if (sShm != NULL) {
+        // (3) El mapeo de Python sobrevive al shm_unlink, así que marcamos la shm
+        // como muerta para que detecte el cierre en vez de leer datos rancios.
+        sShm->magic = 0;
+        RL_FENCE();
         munmap(sShm, sizeof(struct RLStateShm));
         sShm = NULL;
     }
