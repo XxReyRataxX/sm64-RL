@@ -76,6 +76,10 @@ sm64config.txt
 !/assets/**/*custom*.bin
 !/assets/**/*custom*/**/*.bin
 
+# Entornos virtuales de Python (el launcher usa .venv/bin/python3 si existe)
+.venv/
+venv/
+
 # Python compilado y caches de herramientas
 __pycache__/
 *.py[cod]

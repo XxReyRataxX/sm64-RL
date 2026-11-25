@@ -261,15 +261,24 @@ void rl_state_publish(void) {
 
         const uint32_t actionId = (uint32_t)(m->action & 0x1FF);
 
-        sShm->isDead = (uint8_t)((m->health < 0x100) ||
-                                 action_in_set(actionId, sDeathActions,
-                                               sizeof(sDeathActions) / sizeof(sDeathActions[0])));
+        // inLevel se calcula PRIMERO: las demas banderas derivadas dependen de el.
+        const int inLevel = (gCurrLevelNum > 0 && m->action != 0 && m->marioObj != NULL);
+        sShm->inLevel = (uint8_t)inLevel;
 
-        sShm->starCollected = (uint8_t)action_in_set(actionId, sStarActions,
-                                                     sizeof(sStarActions) / sizeof(sStarActions[0]));
+        // Fuera del nivel Mario no existe (health=0, action=0): un Mario que todavia
+        // no ha nacido no esta muerto, ni en el aire, ni cogiendo una estrella. Sin
+        // esta guarda, isDead valia 1 durante los ~169 frames de carga y cualquier
+        // entorno que empezase el episodio ahi lo terminaba en el primer step.
+        sShm->isDead = (uint8_t)(inLevel &&
+                                 ((m->health < 0x100) ||
+                                  action_in_set(actionId, sDeathActions,
+                                                sizeof(sDeathActions) / sizeof(sDeathActions[0]))));
 
-        sShm->inLevel = (uint8_t)(gCurrLevelNum > 0 && m->action != 0 && m->marioObj != NULL);
-        sShm->inAir   = (uint8_t)((m->action & ACT_FLAG_AIR) != 0);
+        sShm->starCollected = (uint8_t)(inLevel &&
+                                        action_in_set(actionId, sStarActions,
+                                                      sizeof(sStarActions) / sizeof(sStarActions[0])));
+
+        sShm->inAir = (uint8_t)(inLevel && (m->action & ACT_FLAG_AIR) != 0);
     } else {
         sShm->inLevel = 0;
     }

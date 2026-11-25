@@ -72,12 +72,13 @@ class SM64Connection:
 
     def __init__(self, shm_name: str, game_binary: str,
                  extra_args: list = None, timeout: float = 2.0,
-                 startup_timeout: float = 15.0):
+                 startup_timeout: float = 15.0, no_render: bool = True):
         self.shm_name        = shm_name
         self.game_binary     = game_binary
         self.extra_args      = extra_args or []
         self.timeout         = timeout
         self.startup_timeout = startup_timeout
+        self.no_render       = no_render
 
         # Nombres de los objetos POSIX (deben coincidir con los prefijos de
         # src/pc/rl_state.h: RL_SHM_PREFIX / RL_*_SEM_PREFIX).
@@ -90,6 +91,17 @@ class SM64Connection:
         self._buf       = None
         self._state_sem = None
         self._action_sem = None
+
+        # El handshake es estrictamente alterno: tras cada wait_state() el juego
+        # se queda bloqueado en sem_wait(action) y NO publicara otro estado hasta
+        # que le mandemos una accion. Si alguien llama a wait_state() dos veces
+        # seguidas (p.ej. un reset() despues de un step() terminal), las dos
+        # partes se esperan mutuamente y la unica salida es el timeout.
+        # Este flag deja ver si "debemos" una accion. Ver resync().
+        self._owes_action = False
+
+        # Frames que costo el ultimo wait_for_level().
+        self.warmup_steps = 0
 
     # ------------------------------------------------------------------
 
@@ -105,11 +117,14 @@ class SM64Connection:
         """
         args = [
             self.game_binary,
-            '--no-render',
             '--state-shm', self.shm_name,
             '--state-sync',
-        ] + self.extra_args
+        ]
+        if self.no_render:
+            args.append('--no-render')
+        args += self.extra_args
 
+        self._owes_action = False
         self._proc = subprocess.Popen(args)
 
         try:
@@ -182,6 +197,8 @@ class SM64Connection:
 
     def close(self):
         """Cierra la conexión, termina el proceso y limpia los objetos POSIX."""
+        self._owes_action = False
+
         if self._buf is not None:
             self._buf.close()
             self._buf = None
@@ -239,15 +256,91 @@ class SM64Connection:
         del munmap, y nuestro mapeo sobrevive al shm_unlink, asi que sin ese
         check leeriamos datos rancios indefinidamente.
         """
-        self._state_sem.acquire(timeout=self.timeout)
+        if self._buf is None:
+            raise RuntimeError("La conexion no esta abierta: falta launch().")
+
+        try:
+            self._state_sem.acquire(timeout=self.timeout)
+        except posix_ipc.BusyError:
+            # Distinguimos los dos motivos reales del timeout, porque el
+            # mensaje de posix_ipc ("Semaphore is busy") no dice nada util.
+            if not self.is_alive():
+                raise RuntimeError(
+                    "El juego murio sin publicar estado "
+                    f"(codigo {self._proc.returncode if self._proc else '?'})."
+                ) from None
+            raise RuntimeError(
+                f"Timeout de {self.timeout}s esperando estado del juego. "
+                "Si el juego sigue vivo, el handshake esta desincronizado: "
+                "¿dos wait_state() seguidos sin send_action() en medio?"
+            ) from None
+
         s = read_state(self._buf)
         if s['magic'] != SHM_MAGIC:
             raise RuntimeError(
                 "El juego cerro la shm (magic=0): el proceso ha terminado."
             )
+        self._owes_action = True
         return s
 
     def send_action(self, action_bits: int):
         """Envía una acción al juego y lo desbloquea."""
+        if self._buf is None:
+            raise RuntimeError("La conexion no esta abierta: falta launch().")
         write_action(self._buf, action_bits)
         self._action_sem.release()
+        self._owes_action = False
+
+    @property
+    def owes_action(self) -> bool:
+        """True si el juego esta bloqueado esperando nuestra accion."""
+        return self._owes_action
+
+    def resync(self, neutral_bits: int = 0) -> dict:
+        """Devuelve un estado fresco dejando el handshake en un punto limpio.
+
+        Pensado para reset(): tras un step() terminal el juego esta parado en
+        sem_wait(action), asi que primero hay que pagar esa accion (un frame con
+        input neutro) y solo despues esperar el estado siguiente. Llamar
+        directamente a wait_state() ahi es un deadlock garantizado.
+        """
+        if self._owes_action:
+            self.send_action(neutral_bits)
+        return self.wait_state()
+
+    def wait_for_level(self, max_steps: int = 1800,
+                       neutral_bits: int = 0) -> dict:
+        """Avanza frames con input neutro hasta que el nivel esta cargado.
+
+        Medido en Bob-omb Battlefield: el juego tarda ~169 frames en cargar
+        (logo + carga del nivel), y durante todos ellos Mario todavia no existe:
+        `health = 0x0000`, `pos = (0,0,0)`, `action = 0`. Observaciones sin
+        sentido para cualquier agente.
+
+        Vive en la capa de conexion, y no en un entorno concreto, para que
+        ningun env futuro tenga que repetirlo.
+
+        Nota historica: C publicaba `isDead = (health < 0x100) || ...` sin
+        consultar `inLevel`, asi que valia 1 durante todo el arranque y un
+        entorno que empezase el episodio ahi lo terminaba en el primer step sin
+        que nada pareciese roto. Eso ya esta arreglado en src/pc/rl_state.c: las
+        cuatro banderas derivadas van guardadas por `inLevel`. Este metodo NO es
+        redundante con ese arreglo — resuelve el otro problema, el de que las
+        observaciones durante la carga no significan nada.
+
+        Devuelve el primer estado ya dentro del nivel. `warmup_steps` queda con
+        los frames que costo.
+        """
+        s = self.resync(neutral_bits)   # deja el handshake en un punto limpio
+        self.warmup_steps = 0
+        while not s['inLevel']:
+            if self.warmup_steps >= max_steps:
+                raise RuntimeError(
+                    f"El nivel no cargo en {max_steps} frames: inLevel sigue "
+                    f"a 0 (health=0x{s['health']:04x}, frame={s['frame']}). "
+                    "¿Se le paso un --level valido al binario?"
+                )
+            self.send_action(neutral_bits)
+            s = self.wait_state()
+            self.warmup_steps += 1
+        return s

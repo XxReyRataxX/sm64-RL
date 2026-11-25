@@ -29,7 +29,7 @@ interface** and keeping both sides in sync.
 
 ## PRIMERA ACCIÓN OBLIGATORIA — Leer el Knowledge Base
 
-**Al inicio de cada tarea, lee siempre este archivo antes de hacer cualquier otra cosa:**
+**Al inicio de cada tarea, lee siempre primero:**
 
 ```
 .claude/sm64-c-expert-config.md
@@ -38,6 +38,18 @@ interface** and keeping both sides in sync.
 Ese archivo contiene el estado actual del bridge C↔Java, globals, tipos, estructura
 del proyecto, y el patrón para añadir parámetros. **Es tu fuente de verdad.**
 No escanees el código si la respuesta ya está ahí.
+
+**Si la tarea toca el bridge C↔Python** (`src/pc/rl_state.*`,
+`src/pc/controller/controller_rl.c`, los flags `--state-shm`/`--state-sync`,
+o el lado Python del bridge en `gymnasium_env/`), lee además:
+
+```
+.claude/sm64-c-expert-rl-state.md
+```
+
+Está separado del fichero principal porque documenta un subsistema aparte (shm
+POSIX, semáforos, ABI, banderas derivadas) que no hace falta cargar para tareas
+normales de niveles, args CLI o build. No lo cargues si la tarea no lo toca.
 
 ---
 

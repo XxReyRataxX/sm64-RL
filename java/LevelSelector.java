@@ -41,8 +41,21 @@ public class LevelSelector extends Application {
 
     // ── Layout constants ───────────────────────────────────────
     private static final int W           = 480;
-    private static final int BASE_H      = 520;
+    /**
+     * Natural height of the window with the terminal collapsed, measured from the
+     * layout itself (title bar 48 + body 447 + 1px border top/bottom). It was 520 when
+     * the Manual slider block still existed; the RL-only body is shorter, so keeping
+     * 520 would just leave dead space above the Launch row.
+     */
+    private static final int BASE_H      = 497;
     private static final int TERM_H      = 160;
+
+    // ── RL defaults (no RL algorithm wired yet) ────────────────
+    private static final int    RL_EPISODES  = 5;
+    private static final int    RL_MAX_STEPS = 3000;
+    // Value for the runner's --algo flag. "connect" is not an algorithm: it only
+    // opens the bridge, waits for the level to load and keeps the game alive.
+    private static final String RL_ALGO_ARG  = "connect";
 
     // ── State ──────────────────────────────────────────────────
     private ComboBox<String> levelCombo;
@@ -50,10 +63,8 @@ public class LevelSelector extends Application {
     private ComboBox<String>          modeCombo;
     private ToggleButton              renderToggle;
     private final java.util.List<Process> activeProcesses = new java.util.ArrayList<>();
-    private Slider           speedSlider;
-    private Label            speedLabel;
-    private Label            blocksFilled;
-    private Label            blocksEmpty;
+    private Spinner<Integer> rlSpeedSpinner;
+    private Label            loadHint;
     private Spinner<Integer> instancesSpinner;
     private Label            instancesHint;
     private Label            launchHint;
@@ -90,6 +101,8 @@ public class LevelSelector extends Application {
             "data:text/css;base64," + Base64.getEncoder().encodeToString(buildCSS().getBytes())
         );
 
+        stage.setOnCloseRequest(e -> { e.consume(); shutdownAndExit(); });
+
         stage.setScene(scene);
         stage.show();
     }
@@ -107,14 +120,6 @@ public class LevelSelector extends Application {
             "  { -fx-background-color:" + SURF_H + "; }\n" +
             ".combo-box .arrow-button { -fx-background-color:" + SURFACE + "; }\n" +
             ".combo-box .arrow { -fx-background-color:" + TEXT2 + "; }\n" +
-            ".slider { -fx-background-color:transparent; }\n" +
-            ".slider .track { -fx-background-color:" + BORDER + "; -fx-pref-height:3px;" +
-            "  -fx-background-insets:0; -fx-background-radius:2; }\n" +
-            ".slider .thumb { -fx-background-color:" + BG + "; -fx-border-color:" + ACCENT + ";" +
-            "  -fx-border-width:2; -fx-background-radius:50%; -fx-border-radius:50%;" +
-            "  -fx-pref-width:14px; -fx-pref-height:14px; -fx-effect:null; }\n" +
-            ".slider .thumb:hover { -fx-border-color:" + ACCENT2 + "; }\n" +
-            ".slider .axis { -fx-tick-label-fill:transparent; }\n" +
             ".spinner { -fx-background-color:" + SURFACE + "; -fx-border-color:" + BORDER + ";" +
             "  -fx-border-width:1; -fx-background-radius:4; -fx-border-radius:4;" +
             "  -fx-focus-color:transparent; -fx-faint-focus-color:transparent; }\n" +
@@ -151,7 +156,7 @@ public class LevelSelector extends Application {
         close.setStyle(closeStyle(TEXT2));
         close.setOnMouseEntered(e -> close.setStyle(closeStyle(TEXT1)));
         close.setOnMouseExited(e  -> close.setStyle(closeStyle(TEXT2)));
-        close.setOnAction(e -> Platform.exit());
+        close.setOnAction(e -> shutdownAndExit());
 
         HBox bar = new HBox(title, spacer, close);
         bar.setPadding(new Insets(14, 16, 10, 20));
@@ -181,13 +186,8 @@ public class LevelSelector extends Application {
         Separator div1 = divider();
         VBox.setMargin(div1, new Insets(20, 0, 18, 0));
 
-        HBox  speedRow = buildSpeedRow();
-        Slider slider  = buildSlider();
-        VBox.setMargin(slider, new Insets(8, 0, 0, 0));
-        HBox blockBar  = buildBlockBar();
-        VBox.setMargin(blockBar, new Insets(6, 0, 0, 0));
-        HBox hints     = buildSpeedHints();
-        VBox.setMargin(hints, new Insets(4, 0, 0, 0));
+        // Single speed control: the 1–100× spinner. No visibility juggling left.
+        VBox rlSpeedBox = buildRlSpeedBox();
 
         VBox instancesSection = buildInstancesSection();
         VBox.setMargin(instancesSection, new Insets(18, 0, 0, 0));
@@ -197,10 +197,12 @@ public class LevelSelector extends Application {
 
         HBox launchRow = buildLaunchRow(stage);
 
-        VBox body = new VBox(heading, sub, levelRow, starRow, modeRow, div1, speedRow, slider, blockBar, hints,
-                             instancesSection, div2, launchRow);
+        VBox body = new VBox(heading, sub, levelRow, starRow, modeRow, div1,
+                             rlSpeedBox, instancesSection, div2, launchRow);
         body.setPadding(new Insets(4, 28, 28, 28));
         body.setStyle("-fx-background-color:transparent;");
+
+        updateLoadTexts();
         return body;
     }
 
@@ -255,13 +257,16 @@ public class LevelSelector extends Application {
         return stars[star].id;
     }
 
-    // ── Mode row (frontend only) ───────────────────────────────
+    // ── Mode row ───────────────────────────────────────────────
+    private static final String MODE_TRAIN  = "Entrenamiento";
+    private static final String MODE_EVAL   = "Evaluación";
+
     private HBox buildModeRow() {
         Label lbl = label("Modo", 12, TEXT2, false);
         lbl.setMinWidth(54);
         modeCombo = new ComboBox<>();
-        modeCombo.getItems().addAll("Entrenamiento", "Evaluación");
-        modeCombo.getSelectionModel().selectFirst();
+        modeCombo.getItems().addAll(MODE_TRAIN, MODE_EVAL);
+        modeCombo.getSelectionModel().selectFirst();   // Entrenamiento por defecto
         modeCombo.setMaxWidth(Double.MAX_VALUE);
         modeCombo.setAccessibleText("Modo de ejecución");
         HBox.setHgrow(modeCombo, Priority.ALWAYS);
@@ -270,66 +275,93 @@ public class LevelSelector extends Application {
         return row;
     }
 
-    // ── Speed row ──────────────────────────────────────────────
-    private HBox buildSpeedRow() {
+    // ── Speed control (spinner, 1×–100×) ───────────────────────
+    // Range mirrors the --speed clamp in src/pc/pc_main.c (1.0–100.0). --speed is a
+    // sleep-based frame limiter (src/pc/gfx/gfx_dummy.c): asking for more than the CPU
+    // can deliver never breaks anything, the instance just runs slower than requested.
+    private static final int RL_SPEED_MIN = 1;
+    private static final int RL_SPEED_MAX = 100;
+    private static final int RL_SPEED_DEF = 5;
+    /** Nominal game tick rate the limiter budgets against (1/(30×speed) per frame). */
+    private static final int BASE_FPS     = 30;
+
+    private VBox buildRlSpeedBox() {
         Label lbl = label("Game speed", 12, TEXT2, false);
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        speedLabel = label("1.0×", 13, ACCENT, true);
-        HBox row = new HBox(lbl, spacer, speedLabel);
-        row.setAlignment(Pos.CENTER_LEFT);
-        return row;
-    }
 
-    private Slider buildSlider() {
-        speedSlider = new Slider(10, 50, 10);
-        speedSlider.setMaxWidth(Double.MAX_VALUE);
-        speedSlider.setShowTickLabels(false);
-        speedSlider.setShowTickMarks(false);
-        speedSlider.valueProperty().addListener((obs, o, n) -> {
-            speedLabel.setText(String.format("%.1f×", n.doubleValue() / 10.0));
-            updateBlockBar(n.doubleValue());
+        rlSpeedSpinner = new Spinner<>(
+            new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                RL_SPEED_MIN, RL_SPEED_MAX, RL_SPEED_DEF));
+        rlSpeedSpinner.setEditable(true);
+        rlSpeedSpinner.setPrefWidth(80);
+        rlSpeedSpinner.setMinWidth(80);
+        rlSpeedSpinner.setMaxWidth(80);
+        rlSpeedSpinner.setAccessibleText("Multiplicador de velocidad del juego para RL, de 1 a 100");
+        // Commit manually typed text when the editor loses focus (same as instancesSpinner)
+        rlSpeedSpinner.focusedProperty().addListener((obs, was, is) -> {
+            if (!is) rlSpeedSpinner.increment(0);
         });
-        return speedSlider;
+        rlSpeedSpinner.valueProperty().addListener((obs, o, n) -> updateLoadTexts());
+
+        Label mult = label("×", 13, ACCENT, true);
+        HBox top = new HBox(12, lbl, spacer, rlSpeedSpinner, mult);
+        top.setAlignment(Pos.CENTER_LEFT);
+
+        loadHint = label("", 11, TEXT2, false);
+        HBox hintRow = new HBox(loadHint);
+        hintRow.setAlignment(Pos.CENTER_RIGHT);
+        VBox.setMargin(hintRow, new Insets(6, 0, 0, 0));
+
+        Label note = label("objetivo, no garantía: si la CPU no da, baja sola", 11, TEXT2, false);
+        HBox noteRow = new HBox(note);
+        noteRow.setAlignment(Pos.CENTER_RIGHT);
+        VBox.setMargin(noteRow, new Insets(2, 0, 0, 0));
+
+        VBox box = new VBox(top, hintRow, noteRow);
+        box.setStyle("-fx-background-color:transparent;");
+        return box;
     }
 
-    // ── Block bar ──────────────────────────────────────────────
-    private static final int BLOCKS = 16;
-
-    private HBox buildBlockBar() {
-        blocksFilled = new Label("");
-        blocksFilled.setStyle("-fx-font-family:monospace; -fx-font-size:13px; -fx-text-fill:" + ACCENT + ";");
-        blocksEmpty  = new Label("░".repeat(BLOCKS));
-        blocksEmpty.setStyle("-fx-font-family:monospace; -fx-font-size:13px; -fx-text-fill:" + BORDER + ";");
-        HBox bar = new HBox(0, blocksFilled, blocksEmpty);
-        bar.setAlignment(Pos.CENTER_LEFT);
-        return bar;
+    /** Speed multiplier used by the RL routes; always inside the C-side clamp. */
+    private int rlSpeed() {
+        if (rlSpeedSpinner == null) return RL_SPEED_DEF;
+        Integer v = rlSpeedSpinner.getValue();
+        if (v == null) return RL_SPEED_DEF;
+        return Math.max(RL_SPEED_MIN, Math.min(RL_SPEED_MAX, v));
     }
 
-    private void updateBlockBar(double value) {
-        int filled = (int) Math.round((value - 10) / 40.0 * BLOCKS);
-        blocksFilled.setText("█".repeat(filled));
-        blocksEmpty.setText("░".repeat(BLOCKS - filled));
-    }
-
-    // ── Speed hints ────────────────────────────────────────────
-    private HBox buildSpeedHints() {
-        Label lo = label("1.0× — normal", 11, TEXT2, false);
-        Region sp = new Region();
-        HBox.setHgrow(sp, Priority.ALWAYS);
-        Label hi = label("5.0× — max", 11, TEXT2, false);
-        return new HBox(lo, sp, hi);
+    /**
+     * Aggregate frame target across every instance. It is only a target: --speed is a
+     * sleep-based limiter, so when the CPU cannot keep up each instance simply runs
+     * slower on its own. Per-instance cost depends on the machine, so no "max
+     * recommended speed" is invented here.
+     */
+    private void updateLoadTexts() {
+        if (loadHint == null) return;
+        int inst = instanceCount();
+        int spd  = rlSpeed();
+        loadHint.setText(inst + " inst × " + spd + "× → ~" + (inst * spd * BASE_FPS) + " fps objetivo");
     }
 
     // ── Instances section ──────────────────────────────────────
+    /**
+     * Ceiling on parallel instances: cores-1, not cores. The Python runner process (and
+     * the OS) needs a core of its own; filling every core with game instances starves
+     * the very process that drives them. Math.max(1, ...) keeps the spinner usable on
+     * 1–2 core hosts, where cores-1 would be 0 or 1 and a max of 0 is a broken control.
+     */
+    private static int maxParallelInstances() {
+        return Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+    }
+
     private VBox buildInstancesSection() {
         Label lbl = label("Lanzamientos", 12, TEXT2, false);
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        int maxCores = Math.min(Runtime.getRuntime().availableProcessors(), 6);
         instancesSpinner = new Spinner<>(
-            new SpinnerValueFactory.IntegerSpinnerValueFactory(1, maxCores, 1));
+            new SpinnerValueFactory.IntegerSpinnerValueFactory(1, maxParallelInstances(), 1));
         instancesSpinner.setEditable(true);
         instancesSpinner.setPrefWidth(80);
         instancesSpinner.setMinWidth(80);
@@ -345,13 +377,14 @@ public class LevelSelector extends Application {
         HBox top = new HBox(12, lbl, spacer, instancesSpinner);
         top.setAlignment(Pos.CENTER_LEFT);
 
-        instancesHint = label("1 instancia  (máx. " + maxCores + ")", 11, TEXT2, false);
+        instancesHint = label("", 11, TEXT2, false);
         HBox hintRow = new HBox(instancesHint);
         hintRow.setAlignment(Pos.CENTER_RIGHT);
         VBox.setMargin(hintRow, new Insets(5, 0, 0, 0));
 
         VBox box = new VBox(top, hintRow);
         box.setStyle("-fx-background-color:transparent;");
+        updateInstanceTexts(instanceCount());   // one single formatter for the hint text
         return box;
     }
 
@@ -361,15 +394,29 @@ public class LevelSelector extends Application {
         return v == null ? 1 : Math.max(1, v);
     }
 
+    /**
+     * Upper bound read from the spinner's own value factory, so the hint can never drift
+     * away from what the spinner actually accepts (it used to recompute the expression
+     * and showed "máx. 12" on a host where the spinner stopped at 6).
+     */
+    private int maxInstances() {
+        if (instancesSpinner != null
+                && instancesSpinner.getValueFactory()
+                   instanceof SpinnerValueFactory.IntegerSpinnerValueFactory f) {
+            return f.getMax();
+        }
+        return 1;
+    }
+
     private void updateInstanceTexts(int n) {
         if (instancesHint != null) {
-            int max = Runtime.getRuntime().availableProcessors();
-            String suffix = "  (máx. " + max + ")";
+            String suffix = "  (máx. " + maxInstances() + ")";
             instancesHint.setText(n == 1 ? "1 instancia" + suffix : n + " instancias en paralelo" + suffix);
         }
         if (launchHint != null) {
             launchHint.setText(n == 1 ? "Ready to launch." : "Launching " + n + " instances.");
         }
+        updateLoadTexts();
     }
 
     // ── Launch row ─────────────────────────────────────────────
@@ -377,6 +424,8 @@ public class LevelSelector extends Application {
         Label hint = label("Ready to launch.", 12, TEXT2, false);
         launchHint = hint;
 
+        // Semantics (kept as-is): selected == NO render, so --render is passed to the
+        // runner only when the toggle is NOT selected.
         renderToggle = new ToggleButton("⬜ Render");
         renderToggle.setSelected(false);
         renderToggle.setStyle(renderToggleStyle(false));
@@ -395,13 +444,28 @@ public class LevelSelector extends Application {
         btn.setOnMouseExited(e  -> btn.setStyle(launchStyle(ACCENT)));
         btn.setOnAction(e -> {
             int idx    = levelCombo.getSelectionModel().getSelectedIndex();
+            if (idx < 0 || idx >= LEVELS.length) idx = 0;
             int starId = selectedStarId();
-            double spd = speedSlider.getValue() / 10.0;
             int    n   = instanceCount();
+            String mode = modeCombo.getSelectionModel().getSelectedItem();
             revealTerminal(stage);
-            for (int i = 0; i < n; i++) {
-                runProcess(LEVELS[idx].courseId, spd, starId);
-            }
+
+            // Only route left: Java owns ONE python process; python owns the N instances.
+            // renderToggle selected == "sin render", so --render goes when NOT selected.
+            boolean render = renderToggle == null || !renderToggle.isSelected();
+            runTraining(new GameLauncher.TrainingConfig(
+                GameLauncher.DEFAULT_ENV_ID,
+                LEVELS[idx].courseId,
+                starId,
+                rlSpeed(),
+                n,
+                render,
+                MODE_EVAL.equals(mode) ? "eval" : "train",
+                RL_EPISODES,
+                RL_MAX_STEPS,
+                RL_ALGO_ARG,
+                "rl_" + System.currentTimeMillis()
+            ));
         });
 
         HBox row = new HBox(12, hint, renderToggle, spacer, btn);
@@ -411,12 +475,72 @@ public class LevelSelector extends Application {
     }
 
     // ── Terminal pane ──────────────────────────────────────────
+    /**
+     * Graceful shutdown: SIGTERM to the whole tree (python + its game children) so
+     * every process runs its cleanup handler and no shm/semaphore is leaked in the
+     * kernel; only SIGKILL as a last resort. Runs off the FX thread (waits up to 4s).
+     */
     private void stopAllProcesses() {
+        java.util.List<Process> snapshot;
         synchronized (activeProcesses) {
-            for (Process p : activeProcesses) p.destroyForcibly();
+            snapshot = new java.util.ArrayList<>(activeProcesses);
             activeProcesses.clear();
         }
-        termAppend("[stopped all instances]");
+        if (snapshot.isEmpty()) {
+            termAppend("[no active instances]");
+            return;
+        }
+        termAppend("[stopping…]");
+
+        Thread killer = new Thread(() -> {
+            terminateTree(snapshot);
+            Platform.runLater(() -> {
+                termAppend("[stopped all instances]");
+                setLaunchHint("stopped");
+            });
+        });
+        killer.setDaemon(true);
+        killer.start();
+    }
+
+    /** Blocking; never call from the JavaFX thread. */
+    private static void terminateTree(java.util.List<Process> procs) {
+        for (Process p : procs) {
+            p.descendants().forEach(ProcessHandle::destroy);
+            p.destroy();
+        }
+        for (Process p : procs) {
+            try {
+                if (!p.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)) {
+                    p.descendants().forEach(ProcessHandle::destroyForcibly);
+                    p.destroyForcibly();
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                p.descendants().forEach(ProcessHandle::destroyForcibly);
+                p.destroyForcibly();
+            }
+        }
+    }
+
+    /** Window close / "×": never leave orphan game instances behind. */
+    private void shutdownAndExit() {
+        java.util.List<Process> snapshot;
+        synchronized (activeProcesses) {
+            snapshot = new java.util.ArrayList<>(activeProcesses);
+            activeProcesses.clear();
+        }
+        if (snapshot.isEmpty()) {
+            Platform.exit();
+            return;
+        }
+        termAppend("[stopping…]");
+        Thread killer = new Thread(() -> {
+            terminateTree(snapshot);
+            Platform.runLater(Platform::exit);
+        });
+        killer.setDaemon(true);
+        killer.start();
     }
 
     private VBox buildTerminalPane() {
@@ -466,35 +590,33 @@ public class LevelSelector extends Application {
         stage.setHeight(newH);
     }
 
-    private void runProcess(String courseId, double speed, int starId) {
+    // ── RL launch (single python process owns the N instances) ──
+    private void runTraining(GameLauncher.TrainingConfig cfg) {
+        java.util.List<String> args = GameLauncher.buildTrainingCommand(cfg);
+        termAppend("$ " + String.join(" ", args));
+
         java.io.File binary = GameLauncher.findBinary();
-        boolean noRender = renderToggle != null && renderToggle.isSelected();
-        String cmd = (binary != null ? binary.getAbsolutePath() : "sm64.us") +
-                     " --level " + courseId +
-                     " --speed " + String.format("%.1f", speed) +
-                     " --star "  + starId +
-                     (noRender ? " --no-render" : "");
-
-        termAppend("$ " + cmd);
-
         if (binary == null || !binary.exists()) {
+            // Python spawns the game, but failing here gives an immediate, clear error.
             termAppend("[error] binary not found — run: make VERSION=us");
+            return;
+        }
+        if (!binary.canExecute()) binary.setExecutable(true);
+
+        java.io.File root = GameLauncher.projectRoot();
+        if (root == null || !root.isDirectory()) {
+            termAppend("[error] project root not found");
             return;
         }
 
         try {
-            if (!binary.canExecute()) binary.setExecutable(true);
-            java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of(
-                binary.getAbsolutePath(),
-                "--level", courseId,
-                "--speed", String.format("%.1f", speed),
-                "--star",  String.valueOf(starId)
-            ));
-            if (noRender) args.add("--no-render");
             ProcessBuilder pb = new ProcessBuilder(args);
+            pb.directory(root);                                 // so `-m gymnasium_env.runner` resolves
+            pb.environment().put("PYTHONUNBUFFERED", "1");
             pb.redirectErrorStream(true);
             Process p = pb.start();
             synchronized (activeProcesses) { activeProcesses.add(p); }
+            setLaunchHint(cfg.mode().equals("eval") ? "evaluating…" : "training…");
 
             Thread reader = new Thread(() -> {
                 try (var br = new java.io.BufferedReader(
@@ -502,7 +624,7 @@ public class LevelSelector extends Application {
                     String line;
                     while ((line = br.readLine()) != null) {
                         final String ln = line;
-                        Platform.runLater(() -> termAppend(ln));
+                        Platform.runLater(() -> termAppendEvent(ln));
                     }
                     int code = p.waitFor();
                     synchronized (activeProcesses) { activeProcesses.remove(p); }
@@ -518,6 +640,54 @@ public class LevelSelector extends Application {
         } catch (Exception e) {
             termAppend("[error] " + e.getMessage());
         }
+    }
+
+    // ── Runner event lines: "@@{...json...}" ───────────────────
+    // Deliberately NOT a JSON parser: just enough regex to read "ev" / "i" and
+    // print the payload without the "@@" marker.
+    private static final java.util.regex.Pattern EV_PAT =
+        java.util.regex.Pattern.compile("\"ev\"\\s*:\\s*\"([^\"]*)\"");
+    private static final java.util.regex.Pattern IDX_PAT =
+        java.util.regex.Pattern.compile("\"i\"\\s*:\\s*(\\d+)");
+    private static final java.util.regex.Pattern EPISODES_PAT =
+        java.util.regex.Pattern.compile("\"episodes\"\\s*:\\s*(\\d+)");
+
+    private void termAppendEvent(String raw) {
+        if (raw == null) return;
+        if (!raw.startsWith("@@")) { termAppend(raw); return; }
+
+        String payload = raw.substring(2).trim();
+        java.util.regex.Matcher m = EV_PAT.matcher(payload);
+        String ev = m.find() ? m.group(1) : "event";
+
+        // Pretty-print: drop braces/quotes and the redundant "ev" pair, keep key=value pairs.
+        String body = payload;
+        if (body.startsWith("{") && body.endsWith("}")) body = body.substring(1, body.length() - 1);
+        body = EV_PAT.matcher(body).replaceFirst("");
+        body = body.replace("\"", "").replace(":", "=").replace(",", " ").trim();
+        termAppend("[" + ev + "]" + (body.isEmpty() ? "" : " " + body));
+
+        switch (ev) {
+            case "start"         -> setLaunchHint("starting…");
+            case "ready"         -> setLaunchHint("ready");
+            case "instance_done" -> setLaunchHint("instance done");
+            case "episode" -> {
+                java.util.regex.Matcher mi = IDX_PAT.matcher(payload);
+                setLaunchHint(mi.find()
+                    ? "episode " + mi.group(1) + "/" + RL_EPISODES
+                    : "training…");
+            }
+            case "done"    -> {
+                java.util.regex.Matcher me = EPISODES_PAT.matcher(payload);
+                setLaunchHint(me.find() ? "done (" + me.group(1) + " episodes)" : "done");
+            }
+            case "error"   -> setLaunchHint("error");
+            default        -> { /* unknown event: already printed above */ }
+        }
+    }
+
+    private void setLaunchHint(String text) {
+        if (launchHint != null) launchHint.setText(text);
     }
 
     private void termAppend(String line) {

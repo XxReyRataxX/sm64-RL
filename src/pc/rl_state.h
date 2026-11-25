@@ -8,6 +8,13 @@
 // Se usan tipos de ancho fijo (<stdint.h>) en lugar de los aliases del codebase
 // (s8/s16/f32) porque el layout del struct forma parte del ABI que Python lee
 // vía `struct`/`mmap`. No reordenar ni insertar campos sin bumpear RL_STATE_VERSION.
+//
+// ESTADO TRANSITORIO DE CARGA — NO ES UN CASO RARO: en Bob-omb Battlefield el
+// nivel tarda unos ~169 frames en cargar, y durante todos ellos Mario todavía no
+// existe. `inLevel` es la bandera que dice si te puedes creer el resto del
+// struct: hasta que valga 1, ignora los demás campos. Los campos crudos (`pos`,
+// `health`, `action`…) son un espejo honesto de `gMarioState` y durante la carga
+// valen 0 de verdad: no están "mal", es que Mario aún no ha nacido.
 // -----------------------------------------------------------------------------
 
 #include <stdint.h>
@@ -43,10 +50,14 @@ struct RLStateShm {
     uint32_t flags;
     uint32_t input;
 
-    uint8_t  isDead;         // derivado: health < 0x100 || action en set de muerte
-    uint8_t  starCollected;  // derivado: action en set de star dance
+    // --- Banderas derivadas ---
+    // CONTRATO: `inLevel` dice si te puedes creer el resto de los derivados.
+    // Los otros tres solo son validos cuando inLevel != 0; fuera del nivel valen
+    // 0 por construccion (estan guardados por inLevel en rl_state_publish()).
+    uint8_t  isDead;         // derivado: inLevel && (health < 0x100 || action en set de muerte)
+    uint8_t  starCollected;  // derivado: inLevel && action en set de star dance
     uint8_t  inLevel;        // derivado: nivel cargado y Mario instanciado
-    uint8_t  inAir;          // derivado: action & ACT_FLAG_AIR (0x00000800)
+    uint8_t  inAir;          // derivado: inLevel && action & ACT_FLAG_AIR (0x00000800)
     // sin _pad: los 4 uint8_t cubren exactamente 4 bytes, alineado a uint32_t
 
     // --- Sincronización para step(): Python escribe aquí ---
