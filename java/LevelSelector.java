@@ -41,7 +41,13 @@ public class LevelSelector extends Application {
 
     // ── Layout constants ───────────────────────────────────────
     private static final int W           = 480;
-    private static final int BASE_H      = 520;
+    /**
+     * Natural height of the window with the terminal collapsed, measured from the
+     * layout itself (title bar 48 + body 447 + 1px border top/bottom). It was 520 when
+     * the Manual slider block still existed; the RL-only body is shorter, so keeping
+     * 520 would just leave dead space above the Launch row.
+     */
+    private static final int BASE_H      = 497;
     private static final int TERM_H      = 160;
 
     // ── RL defaults (no RL algorithm wired yet) ────────────────
@@ -114,14 +120,6 @@ public class LevelSelector extends Application {
             "  { -fx-background-color:" + SURF_H + "; }\n" +
             ".combo-box .arrow-button { -fx-background-color:" + SURFACE + "; }\n" +
             ".combo-box .arrow { -fx-background-color:" + TEXT2 + "; }\n" +
-            ".slider { -fx-background-color:transparent; }\n" +
-            ".slider .track { -fx-background-color:" + BORDER + "; -fx-pref-height:3px;" +
-            "  -fx-background-insets:0; -fx-background-radius:2; }\n" +
-            ".slider .thumb { -fx-background-color:" + BG + "; -fx-border-color:" + ACCENT + ";" +
-            "  -fx-border-width:2; -fx-background-radius:50%; -fx-border-radius:50%;" +
-            "  -fx-pref-width:14px; -fx-pref-height:14px; -fx-effect:null; }\n" +
-            ".slider .thumb:hover { -fx-border-color:" + ACCENT2 + "; }\n" +
-            ".slider .axis { -fx-tick-label-fill:transparent; }\n" +
             ".spinner { -fx-background-color:" + SURFACE + "; -fx-border-color:" + BORDER + ";" +
             "  -fx-border-width:1; -fx-background-radius:4; -fx-border-radius:4;" +
             "  -fx-focus-color:transparent; -fx-faint-focus-color:transparent; }\n" +
@@ -590,61 +588,6 @@ public class LevelSelector extends Application {
         int newH = BASE_H + TERM_H;
         windowClip.setHeight(newH);
         stage.setHeight(newH);
-    }
-
-    private void runProcess(String courseId, double speed, int starId) {
-        java.io.File binary = GameLauncher.findBinary();
-        boolean noRender = renderToggle != null && renderToggle.isSelected();
-        String cmd = (binary != null ? binary.getAbsolutePath() : "sm64.us") +
-                     " --level " + courseId +
-                     " --speed " + String.format(java.util.Locale.ROOT, "%.1f", speed) +
-                     " --star "  + starId +
-                     (noRender ? " --no-render" : "");
-
-        termAppend("$ " + cmd);
-
-        if (binary == null || !binary.exists()) {
-            termAppend("[error] binary not found — run: make VERSION=us");
-            return;
-        }
-
-        try {
-            if (!binary.canExecute()) binary.setExecutable(true);
-            java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of(
-                binary.getAbsolutePath(),
-                "--level", courseId,
-                // Locale.ROOT: "2,5" would be atof()'d to 2.0 by the C side, silently.
-                "--speed", String.format(java.util.Locale.ROOT, "%.1f", speed),
-                "--star",  String.valueOf(starId)
-            ));
-            if (noRender) args.add("--no-render");
-            ProcessBuilder pb = new ProcessBuilder(args);
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-            synchronized (activeProcesses) { activeProcesses.add(p); }
-
-            Thread reader = new Thread(() -> {
-                try (var br = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(p.getInputStream()))) {
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        final String ln = line;
-                        Platform.runLater(() -> termAppend(ln));
-                    }
-                    int code = p.waitFor();
-                    synchronized (activeProcesses) { activeProcesses.remove(p); }
-                    Platform.runLater(() -> termAppend("[exited with code " + code + "]"));
-                } catch (Exception e) {
-                    synchronized (activeProcesses) { activeProcesses.remove(p); }
-                    Platform.runLater(() -> termAppend("[error] " + e.getMessage()));
-                }
-            });
-            reader.setDaemon(true);
-            reader.start();
-
-        } catch (Exception e) {
-            termAppend("[error] " + e.getMessage());
-        }
     }
 
     // ── RL launch (single python process owns the N instances) ──

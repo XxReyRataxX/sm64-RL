@@ -28,7 +28,7 @@ sm64-RL/
 │       └── title_screen.c     ← Lee gAutoStartLevelNum para saltar menú
 ├── java/
 │   ├── GameLauncher.java      ← Construye el ProcessBuilder con los args
-│   └── LevelSelector.java     ← UI JavaFX principal (ComboBox + Slider)
+│   └── LevelSelector.java     ← UI JavaFX principal (ComboBox + Spinner)
 ├── include/
 │   └── sm64.h                 ← Tipos globales: s8, s16, s32, f32, u8...
 └── Makefile                   ← Build system; VERSION=us; salida: build/us_pc/sm64.us
@@ -89,13 +89,16 @@ if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
 | `--star <n>` | `s8` | `gAutoStartActNum` → `gCurrActNum` | clamp 1–6 |
 | `--speed <f>` | `float` | `gSpeedMultiplier` | clamp 1.0–100.0 |
 
-### `--speed`: la UI es más restrictiva que el binario
+### `--speed` y el throughput
 
-El binario acepta hasta **100.0×** (`src/pc/pc_main.c:276`), pero el slider de la UI
-JavaFX está limitado a **1.0–5.0×**: `new Slider(10, 50, 10)` en
-`java/LevelSelector.java:298`, y el valor se divide por `10.0` antes de pasarlo
-(líneas 303 y 415). Es decir, la UI nunca puede pedir más de 5.0× aunque el C lo
-soporte — probablemente el origen del viejo clamp de 5.0f.
+El binario acepta **1.0–100.0×** (clamp en `src/pc/pc_main.c:276`). La UI ya no
+limita a 5.0×: al eliminarse el modo Manual, el slider desapareció y la velocidad
+se elige con un `Spinner` editable de **1 a 100** en `java/LevelSelector.java`.
+
+`--speed` es un **limitador por sueño, no un acelerador**: `src/pc/gfx/gfx_dummy.c:80-93`
+calcula el presupuesto de frame como `1/(30 × spd)` y duerme lo que sobra; si el frame
+ya tardó más que ese presupuesto, no duerme nada y sigue. Consecuencia: pedir más
+velocidad de la que la CPU puede dar **no rompe nada, solo degrada**.
 
 **El throughput escala de verdad con este flag** (medido headless, `--no-render`):
 
@@ -104,22 +107,32 @@ soporte — probablemente el origen del viejo clamp de 5.0f.
 | `1.0` | ~30 fps |
 | `10.0` | ~300 fps |
 
-Dato relevante para entrenamiento: para exprimir el throughput hay que pasar `--speed`
-por CLI (o por el runner de Python), no por el slider de la UI.
+Con varias instancias, cada una es un proceso aparte que compite por CPU. El tope de
+instancias de la UI es `max(1, cores - 1)`, dejando un núcleo al proceso Python del
+runner y al sistema.
 
 ### Correspondencia Java
 
+**Java ya no lanza el binario del juego.** Lanza el runner de Python, y Python es dueño
+de las N instancias (ver §9.10). La ruta del binario viaja como un argumento más:
+
 ```java
-// java/GameLauncher.java, línea ~30
-new ProcessBuilder(
-    binary.getAbsolutePath(),
-    "--level", courseId,          // String del Level.id en LevelSelector
-    "--speed", String.format("%.1f", speed),
-    "--star",  String.valueOf(starId)
-).inheritIO().start();
+// java/GameLauncher.java — buildTrainingCommand(TrainingConfig)
+args.add(findPython());               // .venv/bin/python3 si existe, si no "python3"
+args.add("-u"); args.add("-m"); args.add("gymnasium_env.runner");
+args.add("--binary");  args.add(binaryPath);
+args.add("--level");   args.add(cfg.courseId());
+args.add("--star");    args.add(String.valueOf(cfg.starId()));
+args.add("--speed");   args.add(String.format(java.util.Locale.ROOT, "%.1f", cfg.speed()));
+args.add("--instances"); args.add(String.valueOf(cfg.instances()));
+// ... --env --shm-prefix --episodes --max-steps --algo --mode [--render]
 ```
 
-Firma actual: `GameLauncher.launch(String courseId, double speed, int starId)`.
+`Locale.ROOT` no es decorativo: sin él, una JVM en locale español emite `--speed 2,5`,
+y el `atof()` del lado C lo interpreta como `2.0` sin dar ningún error.
+
+Los métodos `GameLauncher.launch(...)` y `showError(...)`, que lanzaban el binario
+directamente en el desaparecido modo Manual, **ya no existen**.
 
 ### Flujo del acto (estrella)
 
@@ -244,6 +257,7 @@ Scripts disponibles en `.claude/scripts/`:
 | 2026-11-03 | Añadido arg `--star` + global `gAutoStartActNum` (→ `gCurrActNum`) | `src/pc/pc_main.c`, `src/menu/title_screen.c` |
 | 2026-11-25 | Documentado el subsistema `rl_state` (bridge C↔Python) → §9 | `src/pc/rl_state.c/.h`, `src/pc/pc_main.c`, `src/pc/controller/controller_rl.c`, `src/pc/controller/controller_entry_point.c` |
 | 2026-11-25 | Corregido clamp de `--speed` en §2 (era 1.0–5.0, el real es 1.0–100.0) + anotado el límite de 5.0× del slider de la UI y el throughput medido | doc only (`pc_main.c:276`, `LevelSelector.java:298`) |
+| 2026-11-25 | Eliminado el modo Manual de la UI: §2 reescrita (Java ya no lanza el binario, lanza el runner de Python; velocidad por Spinner 1–100; `GameLauncher.launch`/`showError` borrados) | doc only (`LevelSelector.java`, `GameLauncher.java`) |
 
 ---
 
@@ -263,7 +277,7 @@ Scripts disponibles en `.claude/scripts/`:
 | `--no-render` | `gNoRender` | `s8` | Headless: fuerza `gfx_dummy_renderer_api` + `gfx_dummy_wm_api` (`pc_main.c:179`) |
 | `--level <n>` | `gAutoStartLevelNum` (+ `gDebugLevelSelect = 1`) | `s8` | Ver §2 |
 | `--star <n>` | `gAutoStartActNum` | `s8` | clamp 1–6 |
-| `--speed <f>` | `gSpeedMultiplier` | `float` | clamp **1.0–100.0**. El slider de la UI solo llega a 5.0× — ver §2 |
+| `--speed <f>` | `gSpeedMultiplier` | `float` | clamp **1.0–100.0**. La UI lo expone con un Spinner 1–100 — ver §2 |
 
 Ninguno de ellos usa getopt: `strcmp` + `atoi`/`atof`, igual que el resto.
 

@@ -1,6 +1,3 @@
-import javafx.application.Platform;
-import javafx.scene.control.Alert;
-import javafx.scene.control.Alert.AlertType;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -87,35 +84,4 @@ public class GameLauncher {
         return args;
     }
 
-    public static void launch(String courseId, double speed, int starId) {
-        File binary = findBinary();
-        if (binary == null || !binary.exists()) {
-            showError("Binary not found.\n\nCompile the game first with: make VERSION=us");
-            return;
-        }
-        try {
-            if (!binary.canExecute()) binary.setExecutable(true);
-            new ProcessBuilder(
-                binary.getAbsolutePath(),
-                "--level", courseId,
-                // Locale.ROOT: with a comma decimal separator the C side atof()s to a
-                // wrong speed silently (no error at all).
-                "--speed", String.format(java.util.Locale.ROOT, "%.1f", speed),
-                "--star",  String.valueOf(starId)
-            ).inheritIO().start();
-        } catch (Exception ex) {
-            showError("Failed to launch the game:\n" + ex.getMessage());
-            ex.printStackTrace();
-        }
-    }
-
-    private static void showError(String message) {
-        Platform.runLater(() -> {
-            Alert alert = new Alert(AlertType.ERROR);
-            alert.setTitle("SM64 — Error");
-            alert.setHeaderText(null);
-            alert.setContentText(message);
-            alert.showAndWait();
-        });
-    }
 }
