@@ -57,10 +57,8 @@ public class LevelSelector extends Application {
     private ComboBox<String>          modeCombo;
     private ToggleButton              renderToggle;
     private final java.util.List<Process> activeProcesses = new java.util.ArrayList<>();
-    private Slider           speedSlider;
-    private Label            speedLabel;
-    private Label            blocksFilled;
-    private Label            blocksEmpty;
+    private Spinner<Integer> rlSpeedSpinner;
+    private Label            loadHint;
     private Spinner<Integer> instancesSpinner;
     private Label            instancesHint;
     private Label            launchHint;
@@ -190,13 +188,8 @@ public class LevelSelector extends Application {
         Separator div1 = divider();
         VBox.setMargin(div1, new Insets(20, 0, 18, 0));
 
-        HBox  speedRow = buildSpeedRow();
-        Slider slider  = buildSlider();
-        VBox.setMargin(slider, new Insets(8, 0, 0, 0));
-        HBox blockBar  = buildBlockBar();
-        VBox.setMargin(blockBar, new Insets(6, 0, 0, 0));
-        HBox hints     = buildSpeedHints();
-        VBox.setMargin(hints, new Insets(4, 0, 0, 0));
+        // Single speed control: the 1–100× spinner. No visibility juggling left.
+        VBox rlSpeedBox = buildRlSpeedBox();
 
         VBox instancesSection = buildInstancesSection();
         VBox.setMargin(instancesSection, new Insets(18, 0, 0, 0));
@@ -206,10 +199,12 @@ public class LevelSelector extends Application {
 
         HBox launchRow = buildLaunchRow(stage);
 
-        VBox body = new VBox(heading, sub, levelRow, starRow, modeRow, div1, speedRow, slider, blockBar, hints,
-                             instancesSection, div2, launchRow);
+        VBox body = new VBox(heading, sub, levelRow, starRow, modeRow, div1,
+                             rlSpeedBox, instancesSection, div2, launchRow);
         body.setPadding(new Insets(4, 28, 28, 28));
         body.setStyle("-fx-background-color:transparent;");
+
+        updateLoadTexts();
         return body;
     }
 
@@ -265,7 +260,6 @@ public class LevelSelector extends Application {
     }
 
     // ── Mode row ───────────────────────────────────────────────
-    private static final String MODE_MANUAL = "Manual (jugar)";
     private static final String MODE_TRAIN  = "Entrenamiento";
     private static final String MODE_EVAL   = "Evaluación";
 
@@ -273,8 +267,8 @@ public class LevelSelector extends Application {
         Label lbl = label("Modo", 12, TEXT2, false);
         lbl.setMinWidth(54);
         modeCombo = new ComboBox<>();
-        modeCombo.getItems().addAll(MODE_MANUAL, MODE_TRAIN, MODE_EVAL);
-        modeCombo.getSelectionModel().selectFirst();
+        modeCombo.getItems().addAll(MODE_TRAIN, MODE_EVAL);
+        modeCombo.getSelectionModel().selectFirst();   // Entrenamiento por defecto
         modeCombo.setMaxWidth(Double.MAX_VALUE);
         modeCombo.setAccessibleText("Modo de ejecución");
         HBox.setHgrow(modeCombo, Priority.ALWAYS);
@@ -283,66 +277,93 @@ public class LevelSelector extends Application {
         return row;
     }
 
-    // ── Speed row ──────────────────────────────────────────────
-    private HBox buildSpeedRow() {
+    // ── Speed control (spinner, 1×–100×) ───────────────────────
+    // Range mirrors the --speed clamp in src/pc/pc_main.c (1.0–100.0). --speed is a
+    // sleep-based frame limiter (src/pc/gfx/gfx_dummy.c): asking for more than the CPU
+    // can deliver never breaks anything, the instance just runs slower than requested.
+    private static final int RL_SPEED_MIN = 1;
+    private static final int RL_SPEED_MAX = 100;
+    private static final int RL_SPEED_DEF = 5;
+    /** Nominal game tick rate the limiter budgets against (1/(30×speed) per frame). */
+    private static final int BASE_FPS     = 30;
+
+    private VBox buildRlSpeedBox() {
         Label lbl = label("Game speed", 12, TEXT2, false);
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
-        speedLabel = label("1.0×", 13, ACCENT, true);
-        HBox row = new HBox(lbl, spacer, speedLabel);
-        row.setAlignment(Pos.CENTER_LEFT);
-        return row;
-    }
 
-    private Slider buildSlider() {
-        speedSlider = new Slider(10, 50, 10);
-        speedSlider.setMaxWidth(Double.MAX_VALUE);
-        speedSlider.setShowTickLabels(false);
-        speedSlider.setShowTickMarks(false);
-        speedSlider.valueProperty().addListener((obs, o, n) -> {
-            speedLabel.setText(String.format("%.1f×", n.doubleValue() / 10.0));
-            updateBlockBar(n.doubleValue());
+        rlSpeedSpinner = new Spinner<>(
+            new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                RL_SPEED_MIN, RL_SPEED_MAX, RL_SPEED_DEF));
+        rlSpeedSpinner.setEditable(true);
+        rlSpeedSpinner.setPrefWidth(80);
+        rlSpeedSpinner.setMinWidth(80);
+        rlSpeedSpinner.setMaxWidth(80);
+        rlSpeedSpinner.setAccessibleText("Multiplicador de velocidad del juego para RL, de 1 a 100");
+        // Commit manually typed text when the editor loses focus (same as instancesSpinner)
+        rlSpeedSpinner.focusedProperty().addListener((obs, was, is) -> {
+            if (!is) rlSpeedSpinner.increment(0);
         });
-        return speedSlider;
+        rlSpeedSpinner.valueProperty().addListener((obs, o, n) -> updateLoadTexts());
+
+        Label mult = label("×", 13, ACCENT, true);
+        HBox top = new HBox(12, lbl, spacer, rlSpeedSpinner, mult);
+        top.setAlignment(Pos.CENTER_LEFT);
+
+        loadHint = label("", 11, TEXT2, false);
+        HBox hintRow = new HBox(loadHint);
+        hintRow.setAlignment(Pos.CENTER_RIGHT);
+        VBox.setMargin(hintRow, new Insets(6, 0, 0, 0));
+
+        Label note = label("objetivo, no garantía: si la CPU no da, baja sola", 11, TEXT2, false);
+        HBox noteRow = new HBox(note);
+        noteRow.setAlignment(Pos.CENTER_RIGHT);
+        VBox.setMargin(noteRow, new Insets(2, 0, 0, 0));
+
+        VBox box = new VBox(top, hintRow, noteRow);
+        box.setStyle("-fx-background-color:transparent;");
+        return box;
     }
 
-    // ── Block bar ──────────────────────────────────────────────
-    private static final int BLOCKS = 16;
-
-    private HBox buildBlockBar() {
-        blocksFilled = new Label("");
-        blocksFilled.setStyle("-fx-font-family:monospace; -fx-font-size:13px; -fx-text-fill:" + ACCENT + ";");
-        blocksEmpty  = new Label("░".repeat(BLOCKS));
-        blocksEmpty.setStyle("-fx-font-family:monospace; -fx-font-size:13px; -fx-text-fill:" + BORDER + ";");
-        HBox bar = new HBox(0, blocksFilled, blocksEmpty);
-        bar.setAlignment(Pos.CENTER_LEFT);
-        return bar;
+    /** Speed multiplier used by the RL routes; always inside the C-side clamp. */
+    private int rlSpeed() {
+        if (rlSpeedSpinner == null) return RL_SPEED_DEF;
+        Integer v = rlSpeedSpinner.getValue();
+        if (v == null) return RL_SPEED_DEF;
+        return Math.max(RL_SPEED_MIN, Math.min(RL_SPEED_MAX, v));
     }
 
-    private void updateBlockBar(double value) {
-        int filled = (int) Math.round((value - 10) / 40.0 * BLOCKS);
-        blocksFilled.setText("█".repeat(filled));
-        blocksEmpty.setText("░".repeat(BLOCKS - filled));
-    }
-
-    // ── Speed hints ────────────────────────────────────────────
-    private HBox buildSpeedHints() {
-        Label lo = label("1.0× — normal", 11, TEXT2, false);
-        Region sp = new Region();
-        HBox.setHgrow(sp, Priority.ALWAYS);
-        Label hi = label("5.0× — max", 11, TEXT2, false);
-        return new HBox(lo, sp, hi);
+    /**
+     * Aggregate frame target across every instance. It is only a target: --speed is a
+     * sleep-based limiter, so when the CPU cannot keep up each instance simply runs
+     * slower on its own. Per-instance cost depends on the machine, so no "max
+     * recommended speed" is invented here.
+     */
+    private void updateLoadTexts() {
+        if (loadHint == null) return;
+        int inst = instanceCount();
+        int spd  = rlSpeed();
+        loadHint.setText(inst + " inst × " + spd + "× → ~" + (inst * spd * BASE_FPS) + " fps objetivo");
     }
 
     // ── Instances section ──────────────────────────────────────
+    /**
+     * Ceiling on parallel instances: cores-1, not cores. The Python runner process (and
+     * the OS) needs a core of its own; filling every core with game instances starves
+     * the very process that drives them. Math.max(1, ...) keeps the spinner usable on
+     * 1–2 core hosts, where cores-1 would be 0 or 1 and a max of 0 is a broken control.
+     */
+    private static int maxParallelInstances() {
+        return Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+    }
+
     private VBox buildInstancesSection() {
         Label lbl = label("Lanzamientos", 12, TEXT2, false);
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        int maxCores = Math.min(Runtime.getRuntime().availableProcessors(), 6);
         instancesSpinner = new Spinner<>(
-            new SpinnerValueFactory.IntegerSpinnerValueFactory(1, maxCores, 1));
+            new SpinnerValueFactory.IntegerSpinnerValueFactory(1, maxParallelInstances(), 1));
         instancesSpinner.setEditable(true);
         instancesSpinner.setPrefWidth(80);
         instancesSpinner.setMinWidth(80);
@@ -358,13 +379,14 @@ public class LevelSelector extends Application {
         HBox top = new HBox(12, lbl, spacer, instancesSpinner);
         top.setAlignment(Pos.CENTER_LEFT);
 
-        instancesHint = label("1 instancia  (máx. " + maxCores + ")", 11, TEXT2, false);
+        instancesHint = label("", 11, TEXT2, false);
         HBox hintRow = new HBox(instancesHint);
         hintRow.setAlignment(Pos.CENTER_RIGHT);
         VBox.setMargin(hintRow, new Insets(5, 0, 0, 0));
 
         VBox box = new VBox(top, hintRow);
         box.setStyle("-fx-background-color:transparent;");
+        updateInstanceTexts(instanceCount());   // one single formatter for the hint text
         return box;
     }
 
@@ -374,15 +396,29 @@ public class LevelSelector extends Application {
         return v == null ? 1 : Math.max(1, v);
     }
 
+    /**
+     * Upper bound read from the spinner's own value factory, so the hint can never drift
+     * away from what the spinner actually accepts (it used to recompute the expression
+     * and showed "máx. 12" on a host where the spinner stopped at 6).
+     */
+    private int maxInstances() {
+        if (instancesSpinner != null
+                && instancesSpinner.getValueFactory()
+                   instanceof SpinnerValueFactory.IntegerSpinnerValueFactory f) {
+            return f.getMax();
+        }
+        return 1;
+    }
+
     private void updateInstanceTexts(int n) {
         if (instancesHint != null) {
-            int max = Runtime.getRuntime().availableProcessors();
-            String suffix = "  (máx. " + max + ")";
+            String suffix = "  (máx. " + maxInstances() + ")";
             instancesHint.setText(n == 1 ? "1 instancia" + suffix : n + " instancias en paralelo" + suffix);
         }
         if (launchHint != null) {
             launchHint.setText(n == 1 ? "Ready to launch." : "Launching " + n + " instances.");
         }
+        updateLoadTexts();
     }
 
     // ── Launch row ─────────────────────────────────────────────
@@ -390,8 +426,8 @@ public class LevelSelector extends Application {
         Label hint = label("Ready to launch.", 12, TEXT2, false);
         launchHint = hint;
 
-        // Semantics (kept as-is): selected == NO render. Manual mode adds --no-render
-        // when selected; RL mode adds --render when NOT selected.
+        // Semantics (kept as-is): selected == NO render, so --render is passed to the
+        // runner only when the toggle is NOT selected.
         renderToggle = new ToggleButton("⬜ Render");
         renderToggle.setSelected(false);
         renderToggle.setStyle(renderToggleStyle(false));
@@ -412,34 +448,26 @@ public class LevelSelector extends Application {
             int idx    = levelCombo.getSelectionModel().getSelectedIndex();
             if (idx < 0 || idx >= LEVELS.length) idx = 0;
             int starId = selectedStarId();
-            double spd = speedSlider.getValue() / 10.0;
             int    n   = instanceCount();
             String mode = modeCombo.getSelectionModel().getSelectedItem();
             revealTerminal(stage);
 
-            if (mode == null || MODE_MANUAL.equals(mode)) {
-                // Manual: Java owns the game processes, one per instance.
-                for (int i = 0; i < n; i++) {
-                    runProcess(LEVELS[idx].courseId, spd, starId);
-                }
-            } else {
-                // RL: Java owns ONE python process; python owns the N game instances.
-                // renderToggle selected == "sin render", so --render goes when NOT selected.
-                boolean render = renderToggle == null || !renderToggle.isSelected();
-                runTraining(new GameLauncher.TrainingConfig(
-                    GameLauncher.DEFAULT_ENV_ID,
-                    LEVELS[idx].courseId,
-                    starId,
-                    spd,
-                    n,
-                    render,
-                    MODE_EVAL.equals(mode) ? "eval" : "train",
-                    RL_EPISODES,
-                    RL_MAX_STEPS,
-                    RL_ALGO_ARG,
-                    "rl_" + System.currentTimeMillis()
-                ));
-            }
+            // Only route left: Java owns ONE python process; python owns the N instances.
+            // renderToggle selected == "sin render", so --render goes when NOT selected.
+            boolean render = renderToggle == null || !renderToggle.isSelected();
+            runTraining(new GameLauncher.TrainingConfig(
+                GameLauncher.DEFAULT_ENV_ID,
+                LEVELS[idx].courseId,
+                starId,
+                rlSpeed(),
+                n,
+                render,
+                MODE_EVAL.equals(mode) ? "eval" : "train",
+                RL_EPISODES,
+                RL_MAX_STEPS,
+                RL_ALGO_ARG,
+                "rl_" + System.currentTimeMillis()
+            ));
         });
 
         HBox row = new HBox(12, hint, renderToggle, spacer, btn);
