@@ -317,14 +317,16 @@ class SM64Connection:
         `health = 0x0000`, `pos = (0,0,0)`, `action = 0`. Observaciones sin
         sentido para cualquier agente.
 
-        Y hay un detalle que muerde: C publica `isDead = (health < 0x100) || ...`
-        SIN consultar `inLevel` (ver src/pc/rl_state.c), asi que `isDead` vale 1
-        durante todo el arranque. Un entorno que empiece el episodio ahi lo
-        termina en el primer step, sin que nada parezca roto.
-
         Vive en la capa de conexion, y no en un entorno concreto, para que
-        ningun env futuro tenga que repetir este apaño. El arreglo de fondo es
-        del lado C: que `inLevel == 0` implique `isDead == 0`.
+        ningun env futuro tenga que repetirlo.
+
+        Nota historica: C publicaba `isDead = (health < 0x100) || ...` sin
+        consultar `inLevel`, asi que valia 1 durante todo el arranque y un
+        entorno que empezase el episodio ahi lo terminaba en el primer step sin
+        que nada pareciese roto. Eso ya esta arreglado en src/pc/rl_state.c: las
+        cuatro banderas derivadas van guardadas por `inLevel`. Este metodo NO es
+        redundante con ese arreglo — resuelve el otro problema, el de que las
+        observaciones durante la carga no significan nada.
 
         Devuelve el primer estado ya dentro del nivel. `warmup_steps` queda con
         los frames que costo.
