@@ -12,4 +12,6 @@ dependencies = [
   "gymnasium",
   "pygame>=2.1.3",
   "pre-commit",
+  # IPC con el juego: shm POSIX + semaforos (gymnasium_env/envs/sm64_connection.py)
+  "posix-ipc>=1.1; sys_platform != 'win32'",
 ]

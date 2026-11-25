@@ -44,6 +44,13 @@ public class LevelSelector extends Application {
     private static final int BASE_H      = 520;
     private static final int TERM_H      = 160;
 
+    // ── RL defaults (no RL algorithm wired yet) ────────────────
+    private static final int    RL_EPISODES  = 5;
+    private static final int    RL_MAX_STEPS = 3000;
+    // Value for the runner's --algo flag. "connect" is not an algorithm: it only
+    // opens the bridge, waits for the level to load and keeps the game alive.
+    private static final String RL_ALGO_ARG  = "connect";
+
     // ── State ──────────────────────────────────────────────────
     private ComboBox<String> levelCombo;
     private ComboBox<String> starCombo;
@@ -89,6 +96,8 @@ public class LevelSelector extends Application {
         scene.getStylesheets().add(
             "data:text/css;base64," + Base64.getEncoder().encodeToString(buildCSS().getBytes())
         );
+
+        stage.setOnCloseRequest(e -> { e.consume(); shutdownAndExit(); });
 
         stage.setScene(scene);
         stage.show();
@@ -151,7 +160,7 @@ public class LevelSelector extends Application {
         close.setStyle(closeStyle(TEXT2));
         close.setOnMouseEntered(e -> close.setStyle(closeStyle(TEXT1)));
         close.setOnMouseExited(e  -> close.setStyle(closeStyle(TEXT2)));
-        close.setOnAction(e -> Platform.exit());
+        close.setOnAction(e -> shutdownAndExit());
 
         HBox bar = new HBox(title, spacer, close);
         bar.setPadding(new Insets(14, 16, 10, 20));
@@ -255,12 +264,16 @@ public class LevelSelector extends Application {
         return stars[star].id;
     }
 
-    // ── Mode row (frontend only) ───────────────────────────────
+    // ── Mode row ───────────────────────────────────────────────
+    private static final String MODE_MANUAL = "Manual (jugar)";
+    private static final String MODE_TRAIN  = "Entrenamiento";
+    private static final String MODE_EVAL   = "Evaluación";
+
     private HBox buildModeRow() {
         Label lbl = label("Modo", 12, TEXT2, false);
         lbl.setMinWidth(54);
         modeCombo = new ComboBox<>();
-        modeCombo.getItems().addAll("Entrenamiento", "Evaluación");
+        modeCombo.getItems().addAll(MODE_MANUAL, MODE_TRAIN, MODE_EVAL);
         modeCombo.getSelectionModel().selectFirst();
         modeCombo.setMaxWidth(Double.MAX_VALUE);
         modeCombo.setAccessibleText("Modo de ejecución");
@@ -377,6 +390,8 @@ public class LevelSelector extends Application {
         Label hint = label("Ready to launch.", 12, TEXT2, false);
         launchHint = hint;
 
+        // Semantics (kept as-is): selected == NO render. Manual mode adds --no-render
+        // when selected; RL mode adds --render when NOT selected.
         renderToggle = new ToggleButton("⬜ Render");
         renderToggle.setSelected(false);
         renderToggle.setStyle(renderToggleStyle(false));
@@ -395,12 +410,35 @@ public class LevelSelector extends Application {
         btn.setOnMouseExited(e  -> btn.setStyle(launchStyle(ACCENT)));
         btn.setOnAction(e -> {
             int idx    = levelCombo.getSelectionModel().getSelectedIndex();
+            if (idx < 0 || idx >= LEVELS.length) idx = 0;
             int starId = selectedStarId();
             double spd = speedSlider.getValue() / 10.0;
             int    n   = instanceCount();
+            String mode = modeCombo.getSelectionModel().getSelectedItem();
             revealTerminal(stage);
-            for (int i = 0; i < n; i++) {
-                runProcess(LEVELS[idx].courseId, spd, starId);
+
+            if (mode == null || MODE_MANUAL.equals(mode)) {
+                // Manual: Java owns the game processes, one per instance.
+                for (int i = 0; i < n; i++) {
+                    runProcess(LEVELS[idx].courseId, spd, starId);
+                }
+            } else {
+                // RL: Java owns ONE python process; python owns the N game instances.
+                // renderToggle selected == "sin render", so --render goes when NOT selected.
+                boolean render = renderToggle == null || !renderToggle.isSelected();
+                runTraining(new GameLauncher.TrainingConfig(
+                    GameLauncher.DEFAULT_ENV_ID,
+                    LEVELS[idx].courseId,
+                    starId,
+                    spd,
+                    n,
+                    render,
+                    MODE_EVAL.equals(mode) ? "eval" : "train",
+                    RL_EPISODES,
+                    RL_MAX_STEPS,
+                    RL_ALGO_ARG,
+                    "rl_" + System.currentTimeMillis()
+                ));
             }
         });
 
@@ -411,12 +449,72 @@ public class LevelSelector extends Application {
     }
 
     // ── Terminal pane ──────────────────────────────────────────
+    /**
+     * Graceful shutdown: SIGTERM to the whole tree (python + its game children) so
+     * every process runs its cleanup handler and no shm/semaphore is leaked in the
+     * kernel; only SIGKILL as a last resort. Runs off the FX thread (waits up to 4s).
+     */
     private void stopAllProcesses() {
+        java.util.List<Process> snapshot;
         synchronized (activeProcesses) {
-            for (Process p : activeProcesses) p.destroyForcibly();
+            snapshot = new java.util.ArrayList<>(activeProcesses);
             activeProcesses.clear();
         }
-        termAppend("[stopped all instances]");
+        if (snapshot.isEmpty()) {
+            termAppend("[no active instances]");
+            return;
+        }
+        termAppend("[stopping…]");
+
+        Thread killer = new Thread(() -> {
+            terminateTree(snapshot);
+            Platform.runLater(() -> {
+                termAppend("[stopped all instances]");
+                setLaunchHint("stopped");
+            });
+        });
+        killer.setDaemon(true);
+        killer.start();
+    }
+
+    /** Blocking; never call from the JavaFX thread. */
+    private static void terminateTree(java.util.List<Process> procs) {
+        for (Process p : procs) {
+            p.descendants().forEach(ProcessHandle::destroy);
+            p.destroy();
+        }
+        for (Process p : procs) {
+            try {
+                if (!p.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)) {
+                    p.descendants().forEach(ProcessHandle::destroyForcibly);
+                    p.destroyForcibly();
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                p.descendants().forEach(ProcessHandle::destroyForcibly);
+                p.destroyForcibly();
+            }
+        }
+    }
+
+    /** Window close / "×": never leave orphan game instances behind. */
+    private void shutdownAndExit() {
+        java.util.List<Process> snapshot;
+        synchronized (activeProcesses) {
+            snapshot = new java.util.ArrayList<>(activeProcesses);
+            activeProcesses.clear();
+        }
+        if (snapshot.isEmpty()) {
+            Platform.exit();
+            return;
+        }
+        termAppend("[stopping…]");
+        Thread killer = new Thread(() -> {
+            terminateTree(snapshot);
+            Platform.runLater(Platform::exit);
+        });
+        killer.setDaemon(true);
+        killer.start();
     }
 
     private VBox buildTerminalPane() {
@@ -471,7 +569,7 @@ public class LevelSelector extends Application {
         boolean noRender = renderToggle != null && renderToggle.isSelected();
         String cmd = (binary != null ? binary.getAbsolutePath() : "sm64.us") +
                      " --level " + courseId +
-                     " --speed " + String.format("%.1f", speed) +
+                     " --speed " + String.format(java.util.Locale.ROOT, "%.1f", speed) +
                      " --star "  + starId +
                      (noRender ? " --no-render" : "");
 
@@ -487,7 +585,8 @@ public class LevelSelector extends Application {
             java.util.List<String> args = new java.util.ArrayList<>(java.util.List.of(
                 binary.getAbsolutePath(),
                 "--level", courseId,
-                "--speed", String.format("%.1f", speed),
+                // Locale.ROOT: "2,5" would be atof()'d to 2.0 by the C side, silently.
+                "--speed", String.format(java.util.Locale.ROOT, "%.1f", speed),
                 "--star",  String.valueOf(starId)
             ));
             if (noRender) args.add("--no-render");
@@ -518,6 +617,106 @@ public class LevelSelector extends Application {
         } catch (Exception e) {
             termAppend("[error] " + e.getMessage());
         }
+    }
+
+    // ── RL launch (single python process owns the N instances) ──
+    private void runTraining(GameLauncher.TrainingConfig cfg) {
+        java.util.List<String> args = GameLauncher.buildTrainingCommand(cfg);
+        termAppend("$ " + String.join(" ", args));
+
+        java.io.File binary = GameLauncher.findBinary();
+        if (binary == null || !binary.exists()) {
+            // Python spawns the game, but failing here gives an immediate, clear error.
+            termAppend("[error] binary not found — run: make VERSION=us");
+            return;
+        }
+        if (!binary.canExecute()) binary.setExecutable(true);
+
+        java.io.File root = GameLauncher.projectRoot();
+        if (root == null || !root.isDirectory()) {
+            termAppend("[error] project root not found");
+            return;
+        }
+
+        try {
+            ProcessBuilder pb = new ProcessBuilder(args);
+            pb.directory(root);                                 // so `-m gymnasium_env.runner` resolves
+            pb.environment().put("PYTHONUNBUFFERED", "1");
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            synchronized (activeProcesses) { activeProcesses.add(p); }
+            setLaunchHint(cfg.mode().equals("eval") ? "evaluating…" : "training…");
+
+            Thread reader = new Thread(() -> {
+                try (var br = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(p.getInputStream()))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        final String ln = line;
+                        Platform.runLater(() -> termAppendEvent(ln));
+                    }
+                    int code = p.waitFor();
+                    synchronized (activeProcesses) { activeProcesses.remove(p); }
+                    Platform.runLater(() -> termAppend("[exited with code " + code + "]"));
+                } catch (Exception e) {
+                    synchronized (activeProcesses) { activeProcesses.remove(p); }
+                    Platform.runLater(() -> termAppend("[error] " + e.getMessage()));
+                }
+            });
+            reader.setDaemon(true);
+            reader.start();
+
+        } catch (Exception e) {
+            termAppend("[error] " + e.getMessage());
+        }
+    }
+
+    // ── Runner event lines: "@@{...json...}" ───────────────────
+    // Deliberately NOT a JSON parser: just enough regex to read "ev" / "i" and
+    // print the payload without the "@@" marker.
+    private static final java.util.regex.Pattern EV_PAT =
+        java.util.regex.Pattern.compile("\"ev\"\\s*:\\s*\"([^\"]*)\"");
+    private static final java.util.regex.Pattern IDX_PAT =
+        java.util.regex.Pattern.compile("\"i\"\\s*:\\s*(\\d+)");
+    private static final java.util.regex.Pattern EPISODES_PAT =
+        java.util.regex.Pattern.compile("\"episodes\"\\s*:\\s*(\\d+)");
+
+    private void termAppendEvent(String raw) {
+        if (raw == null) return;
+        if (!raw.startsWith("@@")) { termAppend(raw); return; }
+
+        String payload = raw.substring(2).trim();
+        java.util.regex.Matcher m = EV_PAT.matcher(payload);
+        String ev = m.find() ? m.group(1) : "event";
+
+        // Pretty-print: drop braces/quotes and the redundant "ev" pair, keep key=value pairs.
+        String body = payload;
+        if (body.startsWith("{") && body.endsWith("}")) body = body.substring(1, body.length() - 1);
+        body = EV_PAT.matcher(body).replaceFirst("");
+        body = body.replace("\"", "").replace(":", "=").replace(",", " ").trim();
+        termAppend("[" + ev + "]" + (body.isEmpty() ? "" : " " + body));
+
+        switch (ev) {
+            case "start"         -> setLaunchHint("starting…");
+            case "ready"         -> setLaunchHint("ready");
+            case "instance_done" -> setLaunchHint("instance done");
+            case "episode" -> {
+                java.util.regex.Matcher mi = IDX_PAT.matcher(payload);
+                setLaunchHint(mi.find()
+                    ? "episode " + mi.group(1) + "/" + RL_EPISODES
+                    : "training…");
+            }
+            case "done"    -> {
+                java.util.regex.Matcher me = EPISODES_PAT.matcher(payload);
+                setLaunchHint(me.find() ? "done (" + me.group(1) + " episodes)" : "done");
+            }
+            case "error"   -> setLaunchHint("error");
+            default        -> { /* unknown event: already printed above */ }
+        }
+    }
+
+    private void setLaunchHint(String text) {
+        if (launchHint != null) launchHint.setText(text);
     }
 
     private void termAppend(String line) {
