@@ -1,5 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <math.h>
 
 #ifdef TARGET_WEB
 #include <emscripten.h>
@@ -33,6 +35,8 @@
 
 #include "rl_state.h"
 
+#include "spawn_override.h"
+
 #include "compat.h"
 
 #define CONFIG_FILE "sm64config.txt"
@@ -50,6 +54,32 @@ s8 gAutoStartActNum = 1;
 float gSpeedMultiplier = 1.0f;
 // Headless mode: when 1 the dummy graphics backend is used (no window, no GPU)
 s8 gNoRender = 0;
+
+// Override del spawn de Mario (--spawn-x / --spawn-y / --spawn-z / --spawn-yaw).
+// Lo consume init_mario() en src/game/mario.c; ver src/pc/spawn_override.h.
+s8 gSpawnOverride = 0;
+s8 gSpawnHasY = 0;
+f32 gSpawnX = 0.0f;
+f32 gSpawnY = 0.0f;
+f32 gSpawnZ = 0.0f;
+s16 gSpawnYaw = 0;
+
+// Flags de presencia internos: el override necesita al menos X y Z
+static s8 sSpawnHasX = 0;
+static s8 sSpawnHasZ = 0;
+
+// startPos de gMarioSpawnInfo es Vec3s, asi que las coordenadas se clampan a s16
+static f32 spawn_clamp_coord(const char *name, f32 v) {
+    if (v > 32767.0f) {
+        fprintf(stderr, "[spawn] %s = %f fuera de rango s16, clampado a 32767\n", name, (double) v);
+        return 32767.0f;
+    }
+    if (v < -32767.0f) {
+        fprintf(stderr, "[spawn] %s = %f fuera de rango s16, clampado a -32767\n", name, (double) v);
+        return -32767.0f;
+    }
+    return v;
+}
 
 // RL state export (--state-shm <name> / --state-sync)
 static const char *sRLShmName = NULL;
@@ -280,8 +310,32 @@ int main(int argc, char *argv[]) {
             sRLShmName = argv[++i];
         } else if (strcmp(argv[i], "--state-sync") == 0) {
             sRLSyncMode = 1;
+        } else if (strcmp(argv[i], "--spawn-x") == 0 && i + 1 < argc) {
+            gSpawnX = spawn_clamp_coord("--spawn-x", (f32) atof(argv[++i]));
+            sSpawnHasX = 1;
+        } else if (strcmp(argv[i], "--spawn-y") == 0 && i + 1 < argc) {
+            gSpawnY = spawn_clamp_coord("--spawn-y", (f32) atof(argv[++i]));
+            gSpawnHasY = 1;
+        } else if (strcmp(argv[i], "--spawn-z") == 0 && i + 1 < argc) {
+            gSpawnZ = spawn_clamp_coord("--spawn-z", (f32) atof(argv[++i]));
+            sSpawnHasZ = 1;
+        } else if (strcmp(argv[i], "--spawn-yaw") == 0 && i + 1 < argc) {
+            // grados -> unidades de angulo s16 de N64 (65536 por vuelta)
+            f32 deg = fmodf((f32) atof(argv[++i]), 360.0f);
+            gSpawnYaw = (s16) (s32) (deg * 65536.0f / 360.0f);
         }
     }
+
+    // El override solo se activa con X y Z; Y es opcional (auto-floor)
+    if (sSpawnHasX && sSpawnHasZ) {
+        gSpawnOverride = 1;
+        fprintf(stderr, "[spawn] override activo: x=%f z=%f y=%s yaw=%d\n", (double) gSpawnX,
+                (double) gSpawnZ, gSpawnHasY ? "explicita" : "auto-floor", (int) gSpawnYaw);
+    } else if (sSpawnHasX || sSpawnHasZ || gSpawnHasY) {
+        fprintf(stderr, "[spawn] se ignora el override: hacen falta al menos --spawn-x y --spawn-z\n");
+        gSpawnHasY = 0;
+    }
+
     main_func();
     return 0;
 }

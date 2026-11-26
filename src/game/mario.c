@@ -1,4 +1,5 @@
 #include <PR/ultratypes.h>
+#include <stdio.h>
 
 #include "sm64.h"
 #include "area.h"
@@ -32,6 +33,7 @@
 #include "save_file.h"
 #include "sound_init.h"
 #include "rumble_init.h"
+#include "pc/spawn_override.h"
 
 u32 unused80339F10;
 s8 filler80339F1C[20];
@@ -1788,6 +1790,38 @@ s32 execute_mario_action(UNUSED struct Object *o) {
 void init_mario(void) {
     Vec3s capPos;
     struct Object *capObject;
+
+    // Override del spawn por CLI (--spawn-x/-y/-z/-yaw). Se parchea gMarioSpawnInfo
+    // ANTES de que el resto de init_mario lo lea, asi cubre el arranque y los respawns.
+    if (gSpawnOverride && gMarioSpawnInfo != NULL) {
+        s8 doPatch = TRUE;
+        f32 spawnY = gSpawnY;
+
+        if (!gSpawnHasY) {
+            // Sin --spawn-y: buscar el suelo desde arriba
+            struct Surface *spawnFloor = NULL;
+            f32 floorY = find_floor(gSpawnX, 20000.0f, gSpawnZ, &spawnFloor);
+
+            if (spawnFloor != NULL) {
+                spawnY = floorY + 1.0f;
+            } else {
+                // Sin suelo valido: fallback al warp original del nivel
+                doPatch = FALSE;
+                fprintf(stderr, "[spawn] sin suelo en (%f, %f), se usa el warp original\n", (double) gSpawnX,
+                       (double) gSpawnZ);
+            }
+        }
+
+        if (doPatch) {
+            gMarioSpawnInfo->startPos[0] = (s16) gSpawnX;
+            gMarioSpawnInfo->startPos[1] = (s16) spawnY;
+            gMarioSpawnInfo->startPos[2] = (s16) gSpawnZ;
+        }
+
+        // El yaw se aplica siempre que el override este activo, incluso en el
+        // fallback de posicion: orientar a Mario es independiente del suelo.
+        gMarioSpawnInfo->startAngle[1] = (s16) gSpawnYaw;
+    }
 
     unused80339F10 = 0;
 

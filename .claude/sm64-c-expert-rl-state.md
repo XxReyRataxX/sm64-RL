@@ -25,6 +25,7 @@
 | `--level <n>` | `gAutoStartLevelNum` (+ `gDebugLevelSelect = 1`) | `s8` | Ver §2 |
 | `--star <n>` | `gAutoStartActNum` | `s8` | clamp 1–6 |
 | `--speed <f>` | `gSpeedMultiplier` | `float` | clamp **1.0–100.0**. La UI lo expone con un Spinner 1–100 — ver §2 |
+| `--spawn-x/-y/-z/-yaw` | `gSpawnX/Y/Z`, `gSpawnYaw` | `f32`/`s16` | Override del spawn de Mario — ver §11 |
 
 Ninguno de ellos usa getopt: `strcmp` + `atoi`/`atof`, igual que el resto.
 
@@ -470,4 +471,102 @@ precisamente el comportamiento deseado frente a un binario viejo.
   `include/object_constants.h`); no hay normalización entre tipos.
 - No se expone `oHealth` / "muerto vs vivo" más allá de `active`, ni la velocidad del
   enemigo.
+
+---
+
+## §11 Override de spawn de Mario
+
+> Añadido 2026-11-26. Permite arrancar (y respawnear) a Mario en una posición
+> arbitraria del área en vez de en el warp del nivel. Pensado para currículo de RL:
+> empezar el episodio cerca del objetivo e ir alejándolo.
+> **NO afecta al ABI de `rl_state`**: es solo input por CLI, no hay campo nuevo en la
+> shm, `RL_STATE_VERSION` sigue en `3` y `SHM_FMT` no cambia.
+
+### 11.1 Flags CLI
+
+| Flag | Tipo | Obligatorio | Notas |
+|------|------|-------------|-------|
+| `--spawn-x <float>` | `f32` | sí (para activar) | clamp a ±32767 con warning a stderr |
+| `--spawn-z <float>` | `f32` | sí (para activar) | clamp a ±32767 con warning a stderr |
+| `--spawn-y <float>` | `f32` | **no** | si falta → auto-floor con `find_floor()` |
+| `--spawn-yaw <deg>` | grados → `s16` | no | `fmodf(deg, 360)` y `* 65536 / 360`; 90° = `16384` |
+
+**El override se activa solo si llegan X **y** Z.** Con solo una (o solo `--spawn-y`)
+se imprime un aviso, se resetea `gSpawnHasY` y se usa el comportamiento viejo. El clamp
+a ±32767 existe porque `SpawnInfo::startPos` es `Vec3s` (`s16`), no floats.
+
+### 11.2 Globals
+
+Definidos en `src/pc/pc_main.c` (justo antes del bloque de `rl_state`), `extern` en el
+header nuevo **`src/pc/spawn_override.h`**. `src/game/mario.c` lo incluye como
+`#include "pc/spawn_override.h"` — funciona porque `src` está en `INCLUDE_DIRS`
+(`Makefile:386`).
+
+| Global | Tipo | Default | Significado |
+|--------|------|---------|-------------|
+| `gSpawnOverride` | `s8` | 0 | 1 = override activo (llegaron X y Z) |
+| `gSpawnHasY` | `s8` | 0 | 1 = Y explícita; 0 = auto-floor |
+| `gSpawnX`, `gSpawnY`, `gSpawnZ` | `f32` | 0 | ya clampados en el parse |
+| `gSpawnYaw` | `s16` | 0 | ya en unidades de ángulo N64 |
+
+Hay además dos `static s8 sSpawnHasX / sSpawnHasZ` file-scope en `pc_main.c` (flags de
+presencia); no se exportan.
+
+### 11.3 Hook: `init_mario()`, no el warp
+
+El parche va **al principio de `init_mario()`** (`src/game/mario.c:1788`), antes de
+`unused80339F10 = 0` y por tanto antes de que la función lea `gMarioSpawnInfo`
+(`find_water_level` en la línea ~1855 es el primer lector). Se modifica
+`gMarioSpawnInfo->startPos[0..2]` y `startAngle[1]`; el resto de `init_mario`
+(`vec3s_to_vec3f`, `find_floor`, clamp al suelo, elección de `ACT_IDLE`/`ACT_WATER_IDLE`)
+funciona sin tocarlo.
+
+**Por qué ahí y no en el level script:** `init_mario()` se llama en el arranque y en cada
+respawn (`src/game/level_update.c:397, 521, 1188`), y el proceso del juego **no se relanza
+entre episodios** (la conexión de Python es dueña de un proceso de larga vida, §9.10). Un
+hook en el warp solo cubriría la primera carga.
+
+### 11.4 Política de la Y opcional y fallback
+
+```
+if (gSpawnOverride && gMarioSpawnInfo != NULL):
+    if gSpawnHasY:            spawnY = gSpawnY
+    else:                     find_floor(gSpawnX, 20000.0f, gSpawnZ, &floor)
+                              floor != NULL -> spawnY = floorY + 1
+                              floor == NULL -> NO parchear startPos (fallback al warp)
+    startAngle[1] = gSpawnYaw   // SIEMPRE que el override esté activo
+```
+
+Decisión deliberada: el **yaw se aplica incluso en el fallback de posición** (orientar a
+Mario no depende de que haya suelo). El ray de `find_floor` se lanza desde `y = 20000`,
+por encima de cualquier geometría de BoB.
+
+### 11.5 Comportamiento verificado (headless, BoB acto 1, `--speed 20`)
+
+| Caso | Resultado |
+|------|-----------|
+| `--spawn-x 1000 --spawn-z 1000 --spawn-yaw 90` | `pos = (1000, 768, 1000)`, `faceAngle[1] = 16384`, `ACT_IDLE`, estable |
+| sin flags de spawn | warp original `(-6558, 0, 6464)`, yaw `24576` |
+| `--spawn-x 99999 --spawn-z 99999 --spawn-yaw 90` | clamp a 32767 → `find_floor` NULL → fallback al warp (yaw sí aplicado). **No crashea** |
+| `--spawn-x 1000 --spawn-y 3000 --spawn-z 1000` | Mario cae desde 3000 y aterriza en 768 con daño de caída (`health 0x880 → 0x680`) |
+| `--spawn-x 20000 --spawn-y 1000 --spawn-z 20000` (Y explícita, sin geometría) | **Mario se queda flotando quieto** en `ACT_IDLE`, no cae ni muere. No crashea, pero es un estado inútil para el agente |
+
+Último caso = la única trampa real: con `--spawn-y` explícita **no hay validación de que
+haya suelo debajo**, así que una coordenada fuera de la malla deja a Mario en un idle
+flotante permanente. Si se quiere la red de seguridad, omitir `--spawn-y` y dejar el
+auto-floor.
+
+### 11.6 `printf` está stubbeado en `pc_main.c`
+
+Trampa descubierta implementando esto: **`src/pc/pc_main.c:113` tiene un `#define printf`
+a secas** (heredado del port). Cualquier `printf` escrito *después* de esa línea —
+incluido todo `main()` — se compila a nada, con un warning de `-Wunused-value` como única
+pista. Los logs de este subsistema usan **`fprintf(stderr, ...)`**, que no está afectado y
+además no se bufferiza. Misma convención que `rl_state.c`.
+
+### 11.7 Pendiente
+
+- El lado Java/Python **no pasa todavía** estos flags: hay que añadirlos a
+  `extra_args` de `SM64Connection` / a la CLI de `gymnasium_env.runner` y a
+  `java/GameLauncher.java` cuando se quiera exponerlo en la UI.
 
