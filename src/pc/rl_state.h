@@ -20,12 +20,44 @@
 #include <stdint.h>
 
 #define RL_STATE_MAGIC   0x534D3634u  // 'S','M','6','4'
-#define RL_STATE_VERSION 2u
+#define RL_STATE_VERSION 3u
 
 // Nombres de los objetos POSIX (se les concatena el <name> pasado por CLI).
 #define RL_SHM_PREFIX        "/sm64_state_"
 #define RL_STATE_SEM_PREFIX  "/sm64_state_"
 #define RL_ACTION_SEM_PREFIX "/sm64_action_"
+
+// -----------------------------------------------------------------------------
+// Enemigos observables
+//
+// Numero FIJO de slots: el ABI de la shm tiene que tener tamaño constante, asi
+// que se exponen siempre RL_MAX_ENEMIES slots y los que sobran llevan type = 0.
+// Los slots estan ORDENADOS POR distToMario ASCENDENTE: el slot 0 es siempre el
+// enemigo mas cercano a Mario. Si hay mas de RL_MAX_ENEMIES enemigos vivos, se
+// exponen solo los RL_MAX_ENEMIES mas cercanos.
+// -----------------------------------------------------------------------------
+#define RL_MAX_ENEMIES 16
+
+// Valores de RLEnemy.type (0 = slot vacio).
+#define RL_ENEMY_NONE             0
+#define RL_ENEMY_GOOMBA           1
+#define RL_ENEMY_KOOPA            2
+#define RL_ENEMY_KOOPA_THE_QUICK  3
+#define RL_ENEMY_CHAIN_CHOMP      4
+#define RL_ENEMY_KING_BOBOMB      5
+#define RL_ENEMY_BOBOMB           6
+
+// 28 bytes por slot, alineacion 4. El _pad explicito existe para que el layout
+// no dependa del padding que elija el compilador: Python lo lee como 'BBxx3ffiI'.
+struct RLEnemy {
+    uint8_t  type;          // RL_ENEMY_*; 0 => slot vacio, ignora el resto
+    uint8_t  active;        // 1 si el objeto esta activo (activeFlags != 0)
+    uint8_t  _pad[2];       // relleno explicito hasta alineacion de 4
+    float    pos[3];        // oPosX / oPosY / oPosZ
+    float    distToMario;   // distancia euclidea 3D a gMarioState->pos
+    int32_t  angleToMario;  // (s16) angulo enemigo->Mario - faceAngle[1] de Mario
+    uint32_t action;        // oAction del objeto (semantica propia de cada behavior)
+};
 
 struct RLStateShm {
     uint32_t magic;          // RL_STATE_MAGIC
@@ -60,7 +92,16 @@ struct RLStateShm {
     uint8_t  inAir;          // derivado: inLevel && action & ACT_FLAG_AIR (0x00000800)
     // sin _pad: los 4 uint8_t cubren exactamente 4 bytes, alineado a uint32_t
 
+    // --- Enemigos (final del bloque de datos juego -> Python) ---
+    // numEnemies = numero de slots validos (<= RL_MAX_ENEMIES). Un 16 significa
+    // "16 o mas enemigos presentes": solo se exponen los 16 mas cercanos.
+    // Guardado por inLevel: fuera del nivel vale 0 y todos los type valen 0.
+    uint32_t numEnemies;
+    struct RLEnemy enemies[RL_MAX_ENEMIES];
+
     // --- Sincronización para step(): Python escribe aquí ---
+    // Se mantiene como ULTIMO campo del struct a proposito: es el unico campo
+    // que escribe Python, y asi ACTIONBITS_OFFSET == sizeof(struct) - 4.
     uint32_t actionBits;     // bitmask de la acción que Python quiere ejecutar
 };
 

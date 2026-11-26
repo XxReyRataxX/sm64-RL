@@ -24,15 +24,53 @@ import posix_ipc
 # int32  numCoins, health, floorAngle
 # uint32 flags, input
 # uint8  isDead, starCollected, inLevel, inAir
-# uint32 actionBits
+# uint32 numEnemies
+# RLEnemy enemies[RL_MAX_ENEMIES]   <- 16 slots x 28 bytes
+# uint32 actionBits                 <- unico campo que escribe Python, siempre ultimo
+#
+# struct RLEnemy (28 bytes, 'BBxx3ffiI'):
+#   uint8  type       0=vacio 1=goomba 2=koopa 3=koopa_the_quick
+#                     4=chain_chomp 5=king_bobomb 6=bobomb
+#   uint8  active     1 si activeFlags != ACTIVE_FLAG_DEACTIVATED
+#   uint8  _pad[2]
+#   float  pos[3]
+#   float  distToMario
+#   int32  angleToMario   (s16) angulo enemigo->Mario menos faceAngle[1] de Mario
+#   uint32 action         oAction del objeto
+#
+# Los slots vienen ORDENADOS por distToMario ascendente (slot 0 = mas cercano) y
+# numEnemies dice cuantos son validos. numEnemies == RL_MAX_ENEMIES significa
+# "16 o mas enemigos presentes": solo se exponen los 16 mas cercanos.
 #
 # No hay seqlock: la sincronizacion la dan los semaforos POSIX (--state-sync),
 # que garantizan que el struct ya esta escrito por completo cuando Python lee.
+#
+# REGLA DURA: este formato es un ABI compartido con src/pc/rl_state.h. Cualquier
+# cambio de campos obliga a bumpear RL_STATE_VERSION / SHM_VERSION y a tocar
+# ambos lados EN EL MISMO COMMIT.
 # ---------------------------------------------------------------------------
-SHM_FMT  = '<IIIfffffffiiiIIIIiiiIIBBBBI'
+RL_MAX_ENEMIES = 16          # RL_MAX_ENEMIES en src/pc/rl_state.h
+
+ENEMY_FMT  = 'BBxx3ffiI'     # sin '<': se concatena dentro de SHM_FMT
+ENEMY_SIZE = struct.calcsize('<' + ENEMY_FMT)   # 28
+
+# Valores de RLEnemy.type (RL_ENEMY_* en src/pc/rl_state.h)
+ENEMY_TYPE_NONE            = 0
+ENEMY_TYPE_GOOMBA          = 1
+ENEMY_TYPE_KOOPA           = 2
+ENEMY_TYPE_KOOPA_THE_QUICK = 3
+ENEMY_TYPE_CHAIN_CHOMP     = 4
+ENEMY_TYPE_KING_BOBOMB     = 5
+ENEMY_TYPE_BOBOMB          = 6
+
+_HEAD_FMT = '<IIIfffffffiiiIIIIiiiIIBBBB'   # hasta inAir incluido
+SHM_FMT  = _HEAD_FMT + 'I' + ENEMY_FMT * RL_MAX_ENEMIES + 'I'
 SHM_SIZE = struct.calcsize(SHM_FMT)
 SHM_MAGIC = 0x534D3634  # 'SM64'
-SHM_VERSION = 2         # RL_STATE_VERSION en src/pc/rl_state.h
+SHM_VERSION = 3         # RL_STATE_VERSION en src/pc/rl_state.h
+
+_ENEMY_SUBFIELDS = ('type', 'active', 'pos0', 'pos1', 'pos2',
+                    'dist', 'angle', 'action')
 
 _FIELDS = [
     'magic', 'version', 'frame',
@@ -44,12 +82,31 @@ _FIELDS = [
     'numCoins', 'health', 'floorAngle',
     'flags', 'input',
     'isDead', 'starCollected', 'inLevel', 'inAir',
+    'numEnemies',
+] + [f'e{i}_{sub}' for i in range(RL_MAX_ENEMIES) for sub in _ENEMY_SUBFIELDS] + [
     'actionBits',
 ]
 _IDX = {name: i for i, name in enumerate(_FIELDS)}
 
-# Offset en bytes de actionBits dentro del struct
-ACTIONBITS_OFFSET = struct.calcsize('<IIIfffffffiiiIIIIiiiIIBBBB')
+# Offset en bytes de actionBits dentro del struct. actionBits es el ultimo campo
+# del struct C por contrato (ver rl_state.h), de ahi el -4.
+ACTIONBITS_OFFSET = SHM_SIZE - 4
+
+# Sanity check del ABI: si esto salta, el struct C y SHM_FMT se han desincronizado.
+assert ENEMY_SIZE == 28, f'RLEnemy deberia medir 28 bytes, mide {ENEMY_SIZE}'
+assert SHM_SIZE == 548, f'RLStateShm deberia medir 548 bytes, mide {SHM_SIZE}'
+assert len(_FIELDS) == len(struct.unpack(SHM_FMT, b'\0' * SHM_SIZE)), \
+    '_FIELDS no cuadra con SHM_FMT'
+
+
+def enemy_slots(state: dict, only_active: bool = True) -> list:
+    """Devuelve los slots de enemigos como lista de dicts, ya ordenados por
+    distancia ascendente. Con only_active=True corta en numEnemies."""
+    n = state['numEnemies'] if only_active else RL_MAX_ENEMIES
+    return [
+        {sub: state[f'e{i}_{sub}'] for sub in _ENEMY_SUBFIELDS}
+        for i in range(min(n, RL_MAX_ENEMIES))
+    ]
 
 
 def read_state(buf) -> dict:
