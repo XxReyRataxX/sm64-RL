@@ -9,7 +9,7 @@ JAVAFX_LIB="../javalib/javafx-sdk-25.0.5/lib"
 MODS="javafx.controls"
 
 echo "Compiling..."
-javac --module-path "$JAVAFX_LIB" --add-modules "$MODS" LevelSelector.java GameLauncher.java
+javac --module-path "$JAVAFX_LIB" --add-modules "$MODS" LevelSelector.java GameLauncher.java BobMap.java
 
 if [ $? -ne 0 ]; then
     echo "Compilation failed."

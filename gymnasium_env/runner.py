@@ -8,7 +8,8 @@ ninguna recompensa. El launcher (java/LevelSelector.java) lanza UN proceso:
         --binary /ruta/build/us_pc/sm64.us \
         --shm-prefix rl_1732556000 --instances 4 \
         --level 9 --star 1 --speed 1.0 [--render] \
-        --algo connect --mode train
+        --algo connect --mode train \
+        [--spawn-mode fixed --spawn 1000,,1000,90 --spawn -5694,,5600,180]
 
 ...y este runner lanza y es dueño de las N instancias del juego. Java NO toca
 nunca el binario en modo RL: si lo hiciera, la propiedad del proceso quedaría
@@ -41,12 +42,139 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import signal
 import sys
 import threading
 import time
 
 from gymnasium_env.envs.sm64_connection import SM64Connection
+
+
+# ---------------------------------------------------------------------------
+# Spawn overrides — flags que cablean --spawn-* del binario C a la línea de
+# comandos de cada instancia. El binario acepta `--spawn-x`, `--spawn-y`
+# (opcional: si falta, se calcula con find_floor), `--spawn-z` y `--spawn-yaw`
+# (grados). Aquí decidimos QUÉ coordenadas usa cada instancia; los flags en sí
+# son transparentes para este archivo, solo se concatenan a `extra_args`.
+# ---------------------------------------------------------------------------
+
+# Rango s16: el C acaba metiendo las coords en short, así que valores fuera de
+# [-32767, 32767] se truncan. Clampeamos antes y avisamos para que no haya
+# sorpresas de "el spawn no era donde yo pedí".
+_S16_MIN, _S16_MAX = -32767, 32767
+
+# Presets de Bob-omb Battlefield. Y=None significa "deja que el C ponga el
+# suelo con find_floor()", que es lo que queremos en puntos del mapa cuya Y
+# exacta no nos sabemos de memoria.
+_BOB_PRESETS: list[tuple[float, float | None, float, float]] = [
+    (-6558.0, None, 6464.0,   0.0),   # salida — warp por defecto
+    ( 1636.0, None, -5567.0, 180.0),  # cima
+    (-5694.0, None,  5600.0,  90.0),  # cañón
+    (-6000.0, None,  2400.0,   0.0),  # red coin
+]
+_BOB_PRESET_NAMES = ['salida', 'cima', 'canon', 'red_coin']
+
+
+def _clamp_s16(v: float, name: str) -> float:
+    """Clampa a rango s16 y avisa; el C lo haría igual pero en silencio."""
+    if v < _S16_MIN or v > _S16_MAX:
+        clamped = max(_S16_MIN, min(_S16_MAX, v))
+        log(f'[warn] {name}={v} fuera de rango s16, clampeado a {clamped}')
+        return clamped
+    return v
+
+
+def _parse_spawn(raw: str) -> tuple[float, float | None, float, float]:
+    """Parsea "X,Y,Z,YAW" con Y opcional (campo vacío → auto-floor)."""
+    parts = raw.split(',')
+    if len(parts) != 4:
+        raise argparse.ArgumentTypeError(
+            f'--spawn espera 4 campos "X,Y,Z,YAW" (Y puede ir vacía), '
+            f'recibí {len(parts)}: {raw!r}')
+    try:
+        x = float(parts[0])
+        y = float(parts[1]) if parts[1].strip() else None
+        z = float(parts[2])
+        yaw = float(parts[3])
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f'--spawn con valor no numérico: {raw!r}') from exc
+    return (x, y, z, yaw)
+
+
+def _parse_area(raw: str) -> tuple[float, float, float, float]:
+    """Parsea "x0,z0,x1,z1" (rectángulo XZ para random_area)."""
+    parts = raw.split(',')
+    if len(parts) != 4:
+        raise argparse.ArgumentTypeError(
+            f'--spawn-area espera "x0,z0,x1,z1", recibí {len(parts)} campos: {raw!r}')
+    try:
+        return tuple(float(v) for v in parts)  # type: ignore[return-value]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f'--spawn-area con valor no numérico: {raw!r}') from exc
+
+
+def _spawn_to_cli(x: float, y: float | None, z: float, yaw: float) -> list[str]:
+    """Convierte una tupla (X, Y, Z, YAW) en los flags que entiende el C.
+
+    Y a None se omite: el binario llama a find_floor() cuando falta --spawn-y,
+    que es lo que querremos casi siempre (no hace falta saber la altura del
+    suelo desde Python).
+    """
+    x = _clamp_s16(x, 'spawn-x')
+    z = _clamp_s16(z, 'spawn-z')
+    out = ['--spawn-x', f'{x:.3f}', '--spawn-z', f'{z:.3f}',
+           '--spawn-yaw', f'{yaw:.3f}']
+    if y is not None:
+        y = _clamp_s16(y, 'spawn-y')
+        out += ['--spawn-y', f'{y:.3f}']
+    return out
+
+
+def spawn_args_for(
+    idx: int, args: argparse.Namespace,
+) -> tuple[list[str], tuple[float, float | None, float, float] | None]:
+    """Decide el spawn de la instancia `idx` y devuelve (flags_cli, tupla).
+
+    El reparto depende del modo:
+      - default     → nada; mantener el warp por defecto del juego
+      - fixed       → round-robin sobre --spawn (K spawns, N instancias)
+      - random_area → muestreo uniforme XZ dentro de --spawn-area con una
+                      semilla derivada de --spawn-seed+idx; así dos ejecuciones
+                      con mismo seed dan exactamente las mismas posiciones
+                      por instancia (reproducibilidad por instancia, no solo
+                      por run global, que no serviría para debuggear casos)
+      - preset      → round-robin sobre la lista hardcoded de BoB
+    """
+    mode = args.spawn_mode
+    if mode == 'default':
+        return [], None
+
+    if mode == 'fixed':
+        # La validación de "hay al menos uno" ya se hizo en preflight; aquí nos
+        # limitamos a repartirlos.
+        spawns = args.spawn
+        tup = spawns[idx % len(spawns)]
+        return _spawn_to_cli(*tup), tup
+
+    if mode == 'random_area':
+        x0, z0, x1, z1 = args.spawn_area
+        # Semilla por instancia: si se usa solo args.spawn_seed todas las
+        # instancias comparten valor y pierden diversidad; +idx garantiza que
+        # cambian entre sí pero se mantienen reproducibles.
+        rng = random.Random((args.spawn_seed or 0) + idx * 1_000_003)
+        x = rng.uniform(min(x0, x1), max(x0, x1))
+        z = rng.uniform(min(z0, z1), max(z0, z1))
+        yaw = rng.uniform(0.0, 360.0)
+        y = args.spawn_y  # None → auto-floor en C
+        tup = (x, y, z, yaw)
+        return _spawn_to_cli(*tup), tup
+
+    if mode == 'preset':
+        tup = _BOB_PRESETS[idx % len(_BOB_PRESETS)]
+        return _spawn_to_cli(*tup), tup
+
+    return [], None
 
 # ---------------------------------------------------------------------------
 # Eventos / log — un solo lock para que los hilos no entrelacen líneas.
@@ -91,12 +219,13 @@ def run_connect(idx: int, args: argparse.Namespace, stop: threading.Event) -> No
     algoritmo, y como diagnóstico de C ↔ Python ↔ Java cuando algo falle.
     """
     shm_name = f'{args.shm_prefix}_{idx}'
+    spawn_cli, spawn_tuple = spawn_args_for(idx, args)
     conn = SM64Connection(
         shm_name=shm_name,
         game_binary=args.binary,
         extra_args=['--level', str(args.level),
                     '--star',  str(args.star),
-                    '--speed', f'{args.speed:.1f}'],
+                    '--speed', f'{args.speed:.1f}'] + spawn_cli,
         no_render=not args.render,
         timeout=args.step_timeout,
     )
@@ -105,7 +234,15 @@ def run_connect(idx: int, args: argparse.Namespace, stop: threading.Event) -> No
     # juego (y su shm y sus semáforos) en cuanto algo lance aquí dentro.
     try:
         conn.launch()
-        emit('ready', inst=idx, shm=shm_name)
+        # Incluir el spawn en `ready` ayuda a depurar desde la UI qué
+        # instancia arrancó dónde; None en Y significa auto-floor (lo resolvió
+        # el C con find_floor), no un dato que falte.
+        ready_fields: dict = {'inst': idx, 'shm': shm_name}
+        if spawn_tuple is not None:
+            x, y, z, yaw = spawn_tuple
+            ready_fields['spawn'] = [round(x, 2), y if y is None else round(y, 2),
+                                     round(z, 2), round(yaw, 2)]
+        emit('ready', **ready_fields)
         log(f'[inst {idx}] shm={shm_name} nivel={args.level} estrella={args.star}')
 
         s = conn.wait_for_level(args.warmup_max_steps)
@@ -195,6 +332,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--step-timeout', type=float, default=2.0,
                    help='segundos de espera por frame antes de dar el juego '
                         'por colgado')
+
+    # Spawn overrides — todos opcionales; sin --spawn-mode se mantiene el warp
+    # por defecto del juego. Ver `spawn_args_for()` para el reparto.
+    p.add_argument('--spawn-mode', default='default',
+                   choices=['default', 'fixed', 'random_area', 'preset'],
+                   help='cómo repartir el spawn entre instancias; default = '
+                        'sin override')
+    p.add_argument('--spawn', action='append', type=_parse_spawn, default=[],
+                   metavar='X,Y,Z,YAW',
+                   help='spawn concreto (repetible); Y vacía = auto-floor, '
+                        'YAW en grados. En modo fixed se reparten round-robin')
+    p.add_argument('--spawn-area', type=_parse_area, default=None,
+                   metavar='x0,z0,x1,z1',
+                   help='rectángulo XZ para modo random_area')
+    p.add_argument('--spawn-y', type=float, default=None,
+                   help='Y común para random_area; si falta → auto-floor en C')
+    p.add_argument('--spawn-seed', type=int, default=None,
+                   help='semilla de random_area para reproducibilidad '
+                        '(se deriva seed+idx por instancia)')
     return p
 
 
@@ -220,6 +376,13 @@ def preflight(args: argparse.Namespace) -> None:
                         f'  →  chmod +x {args.binary}')
     if args.instances < 1:
         problems.append('--instances tiene que ser >= 1')
+
+    # Validación cruzada de spawn: queremos que un error de configuración salte
+    # aquí y no a medio run cuando ya hay procesos vivos.
+    if args.spawn_mode == 'fixed' and not args.spawn:
+        problems.append('--spawn-mode fixed requiere al menos un --spawn X,Y,Z,YAW')
+    if args.spawn_mode == 'random_area' and args.spawn_area is None:
+        problems.append('--spawn-mode random_area requiere --spawn-area x0,z0,x1,z1')
 
     if problems:
         raise SystemExit('\n'.join(f'[error] {p}' for p in problems))

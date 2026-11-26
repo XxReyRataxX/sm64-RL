@@ -3,13 +3,22 @@ import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.*;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.scene.shape.Rectangle;
+import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
+import javafx.scene.text.TextAlignment;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 
 public class LevelSelector extends Application {
 
@@ -40,14 +49,21 @@ public class LevelSelector extends Application {
     };
 
     // ── Layout constants ───────────────────────────────────────
-    private static final int W           = 480;
     /**
-     * Natural height of the window with the terminal collapsed, measured from the
-     * layout itself (title bar 48 + body 447 + 1px border top/bottom). It was 520 when
-     * the Manual slider block still existed; the RL-only body is shorter, so keeping
-     * 520 would just leave dead space above the Launch row.
+     * Window width. Was 480 while the body was a single column of combos; the spawn
+     * section needs the coord table and the 280px map side by side, and 480 left only
+     * ~124px for the table (three coord fields do not fit). 640 = 28px padding × 2 +
+     * 288 controls + 14 gap + 282 map.
      */
-    private static final int BASE_H      = 497;
+    private static final int W           = 640;
+    /**
+     * Natural height of the window with the terminal collapsed (title bar 48 + body +
+     * 1px border top/bottom). The RL-only body was 497; the spawn section adds ~354
+     * (mode row 27 + map 282 + hint + margins), hence 856. If the body grows again and
+     * gets clipped at the bottom, this is the number to raise — the scene height is
+     * fixed, so nothing scrolls on its own.
+     */
+    private static final int BASE_H      = 856;
     private static final int TERM_H      = 160;
 
     // ── RL defaults (no RL algorithm wired yet) ────────────────
@@ -68,6 +84,18 @@ public class LevelSelector extends Application {
     private Spinner<Integer> instancesSpinner;
     private Label            instancesHint;
     private Label            launchHint;
+    // Spawn section
+    private ComboBox<String> spawnModeCombo;
+    private Canvas           mapCanvas;
+    private GridPane         legendBox;
+    private Label            spawnHint;
+    private VBox             defaultPanel, fixedPanel, areaPanel, presetPanel;
+    private VBox             fixedRows;
+    private final List<SpawnRow> fixedRowList = new ArrayList<>();
+    private int              selectedFixedRow = 0;
+    private Spinner<Integer> areaX0, areaZ0, areaX1, areaZ1, seedSpinner;
+    private TextField        areaYField;
+    private CheckBox[]       presetChecks;
     private TextArea         terminal;
     private VBox             terminalPane;
     private Rectangle        windowClip;
@@ -136,6 +164,32 @@ public class LevelSelector extends Application {
             ".spinner .increment-arrow-button:hover .increment-arrow," +
             ".spinner .decrement-arrow-button:hover .decrement-arrow" +
             "  { -fx-background-color:" + ACCENT + "; }\n" +
+            // Spawn section: coord fields, the row scroller and the preset checkboxes.
+            ".coord { -fx-background-color:" + SURFACE + "; -fx-text-fill:" + TEXT1 + ";" +
+            "  -fx-font-family:monospace; -fx-font-size:11px; -fx-padding:2 4 2 4;" +
+            "  -fx-border-color:" + BORDER + "; -fx-border-width:1;" +
+            "  -fx-background-radius:3; -fx-border-radius:3;" +
+            "  -fx-highlight-fill:" + BORDER + "; -fx-highlight-text-fill:" + TEXT1 + ";" +
+            "  -fx-prompt-text-fill:" + TEXT2 + ";" +
+            "  -fx-focus-color:transparent; -fx-faint-focus-color:transparent; }\n" +
+            ".coord:focused { -fx-border-color:" + ACCENT + "; }\n" +
+            ".spawn-scroll,.spawn-scroll > .viewport { -fx-background-color:transparent; }\n" +
+            ".spawn-scroll { -fx-background-insets:0; -fx-padding:0; -fx-border-color:transparent;" +
+            "  -fx-focus-color:transparent; -fx-faint-focus-color:transparent; }\n" +
+            ".spawn-scroll .scroll-bar:vertical { -fx-background-color:transparent; -fx-pref-width:6; }\n" +
+            ".spawn-scroll .scroll-bar .thumb { -fx-background-color:" + BORDER + "; }\n" +
+            ".spawn-scroll .scroll-bar .increment-button," +
+            ".spawn-scroll .scroll-bar .decrement-button { -fx-pref-height:0; -fx-padding:0; }\n" +
+            // -fx-padding:0 and nothing else on purpose: "-fx-shape:null" is not a legal
+            // value and only earns a CSS parse warning on every start-up.
+            ".spawn-scroll .scroll-bar .increment-arrow," +
+            ".spawn-scroll .scroll-bar .decrement-arrow { -fx-padding:0; }\n" +
+            ".spawn-check { -fx-text-fill:" + TEXT1 + "; -fx-font-family:monospace;" +
+            "  -fx-font-size:11px; -fx-focus-color:transparent; -fx-faint-focus-color:transparent; }\n" +
+            ".spawn-check .box { -fx-background-color:" + SURFACE + ";" +
+            "  -fx-border-color:" + BORDER + "; -fx-border-width:1;" +
+            "  -fx-background-radius:3; -fx-border-radius:3; }\n" +
+            ".spawn-check:selected .mark { -fx-background-color:" + ACCENT + "; }\n" +
             ".term { -fx-control-inner-background:" + TERM_BG + "; -fx-text-fill:" + TERM_TEXT + ";" +
             "  -fx-font-family:monospace; -fx-font-size:12px; -fx-background-color:" + TERM_BG + ";" +
             "  -fx-border-color:transparent; -fx-focus-color:transparent; -fx-faint-focus-color:transparent; }\n" +
@@ -183,6 +237,9 @@ public class LevelSelector extends Application {
         HBox  modeRow  = buildModeRow();
         VBox.setMargin(modeRow, new Insets(10, 0, 0, 0));
 
+        VBox  spawnSection = buildSpawnSection();
+        VBox.setMargin(spawnSection, new Insets(14, 0, 0, 0));
+
         Separator div1 = divider();
         VBox.setMargin(div1, new Insets(20, 0, 18, 0));
 
@@ -197,7 +254,7 @@ public class LevelSelector extends Application {
 
         HBox launchRow = buildLaunchRow(stage);
 
-        VBox body = new VBox(heading, sub, levelRow, starRow, modeRow, div1,
+        VBox body = new VBox(heading, sub, levelRow, starRow, modeRow, spawnSection, div1,
                              rlSpeedBox, instancesSection, div2, launchRow);
         body.setPadding(new Insets(4, 28, 28, 28));
         body.setStyle("-fx-background-color:transparent;");
@@ -273,6 +330,696 @@ public class LevelSelector extends Application {
         HBox row = new HBox(12, lbl, modeCombo);
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // Spawn section — controls on the left, top-down map on the right
+    // ══════════════════════════════════════════════════════════
+    private static final String SP_DEFAULT = "Default del juego";
+    private static final String SP_FIXED   = "Punto fijo";
+    private static final String SP_AREA    = "Área aleatoria";
+    private static final String SP_PRESET  = "Presets BoB";
+
+    /** Side of the map in pixels. 280 over a ±8000 bbox → 17.5px per 1000 units. */
+    private static final double MAP_PX = 280;
+    /** Width of the controls column; see the W javadoc for how the 640 breaks down. */
+    private static final double LEFT_W = 288;
+
+    // Map colours (not in the palette above: they are data colours, not chrome)
+    private static final String MAP_BG    = "#030804";
+    private static final String MAP_AXIS  = "#1C3524";
+    private static final String WARP_COL  = "#7A8A7E";
+    private static final String SPAWN_COL = "#FFD400";
+
+    private VBox buildSpawnSection() {
+        Label lbl = label("Spawn", 12, TEXT2, false);
+        lbl.setMinWidth(54);
+        spawnModeCombo = new ComboBox<>();
+        spawnModeCombo.getItems().addAll(SP_DEFAULT, SP_FIXED, SP_AREA, SP_PRESET);
+        spawnModeCombo.getSelectionModel().selectFirst();
+        spawnModeCombo.setMaxWidth(Double.MAX_VALUE);
+        spawnModeCombo.setAccessibleText("Cómo se decide dónde aparece Mario en cada instancia");
+        HBox.setHgrow(spawnModeCombo, Priority.ALWAYS);
+        HBox modeRow = new HBox(12, lbl, spawnModeCombo);
+        modeRow.setAlignment(Pos.CENTER_LEFT);
+
+        mapCanvas = new Canvas(MAP_PX, MAP_PX);
+        mapCanvas.setAccessibleText("Plano superior de Bob-omb Battlefield con enemigos y puntos de aparición");
+        mapCanvas.setOnMousePressed(this::onMapPressed);
+        mapCanvas.setOnMouseDragged(this::onMapDragged);
+        StackPane mapFrame = new StackPane(mapCanvas);
+        mapFrame.setStyle("-fx-border-color:" + BORDER + "; -fx-border-width:1;");
+        mapFrame.setMinSize(MAP_PX + 2, MAP_PX + 2);
+        mapFrame.setMaxSize(MAP_PX + 2, MAP_PX + 2);
+
+        defaultPanel = buildDefaultPanel();
+        fixedPanel   = buildFixedPanel();
+        areaPanel    = buildAreaPanel();
+        presetPanel  = buildPresetPanel();
+        // StackPane + managed(false) on the hidden panels: the section's height follows
+        // the visible panel only, instead of always reserving room for the tallest.
+        StackPane panels = new StackPane(defaultPanel, fixedPanel, areaPanel, presetPanel);
+        panels.setAlignment(Pos.TOP_LEFT);
+
+        legendBox = new GridPane();
+        legendBox.setHgap(6);
+        legendBox.setVgap(2);
+
+        VBox left = new VBox(8, panels, legendBox);
+        left.setMinWidth(LEFT_W);
+        left.setPrefWidth(LEFT_W);
+        left.setMaxWidth(LEFT_W);
+
+        HBox content = new HBox(14, left, mapFrame);
+        content.setAlignment(Pos.TOP_LEFT);
+
+        spawnHint = label("", 11, TEXT2, false);
+
+        spawnModeCombo.getSelectionModel().selectedItemProperty()
+            .addListener((obs, o, n) -> applySpawnMode());
+        // The act decides which enemies exist (king bob-omb act 1, KtQ act 2, …)
+        starCombo.getSelectionModel().selectedIndexProperty()
+            .addListener((obs, o, n) -> redrawMap());
+
+        VBox box = new VBox(8, modeRow, content, spawnHint);
+        box.setStyle("-fx-background-color:transparent;");
+        applySpawnMode();
+        return box;
+    }
+
+    private String spawnModeName() {
+        if (spawnModeCombo == null) return SP_DEFAULT;
+        String v = spawnModeCombo.getSelectionModel().getSelectedItem();
+        return v == null ? SP_DEFAULT : v;
+    }
+
+    private void applySpawnMode() {
+        String m = spawnModeName();
+        showPanel(defaultPanel, SP_DEFAULT.equals(m));
+        showPanel(fixedPanel,   SP_FIXED.equals(m));
+        showPanel(areaPanel,    SP_AREA.equals(m));
+        showPanel(presetPanel,  SP_PRESET.equals(m));
+        // Entering "punto fijo" with an empty table would show a map with no spawn at
+        // all; seed it with the level's own warp so there is always something to drag.
+        if (SP_FIXED.equals(m) && fixedRowList.isEmpty()) {
+            addFixedRow(BobMap.WARP_X, BobMap.WARP_Z, BobMap.WARP_YAW);
+        }
+        redrawMap();
+    }
+
+    private static void showPanel(VBox p, boolean on) {
+        if (p == null) return;
+        p.setVisible(on);
+        p.setManaged(on);
+    }
+
+    // ── Per-mode panels ───────────────────────────────────────
+    private VBox buildDefaultPanel() {
+        Label a = label("Sin override: cada instancia usa el warp", 11, TEXT2, false);
+        Label b = label("del nivel (" + (int) BobMap.WARP_X + ", " + (int) BobMap.WARP_Z + ").", 11, TEXT2, false);
+        Label c = label("El plano solo muestra enemigos.", 11, TEXT2, false);
+        VBox v = new VBox(3, a, b, c);
+        v.setStyle("-fx-background-color:transparent;");
+        return v;
+    }
+
+    /** One editable coord row per spawn point; fewer rows than instances = round-robin. */
+    private record SpawnRow(HBox node, Label idx, TextField x, TextField z, TextField yaw) {}
+
+    private VBox buildFixedPanel() {
+        Label head = label("Puntos (round-robin entre instancias)", 11, TEXT2, false);
+        HBox cols = new HBox(4, colHeader("#", 26), colHeader("X", 72),
+                                colHeader("Z", 72), colHeader("Yaw°", 56));
+
+        fixedRows = new VBox(4);
+        fixedRows.setStyle("-fx-background-color:transparent;");
+        ScrollPane sp = new ScrollPane(fixedRows);
+        sp.getStyleClass().add("spawn-scroll");
+        sp.setFitToWidth(true);
+        sp.setPrefViewportHeight(104);
+        sp.setMaxHeight(104);
+        sp.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        sp.setFocusTraversable(false);
+
+        Button add = miniButton("+ fila");
+        add.setOnAction(e -> {
+            // New rows clone the last one: adding a point near the previous one and
+            // nudging it is the common case, and an empty row would break the preview.
+            double[] last = fixedRowList.isEmpty()
+                ? new double[] { BobMap.WARP_X, BobMap.WARP_Z, BobMap.WARP_YAW }
+                : rowValues(fixedRowList.get(fixedRowList.size() - 1));
+            addFixedRow(last[0], last[1], last[2]);
+            selectFixedRow(fixedRowList.size() - 1);
+            redrawMap();
+        });
+        Button del = miniButton("− fila");
+        del.setOnAction(e -> {
+            if (fixedRowList.size() <= 1) return;   // never leave the table empty
+            int i = Math.min(selectedFixedRow, fixedRowList.size() - 1);
+            fixedRows.getChildren().remove(fixedRowList.remove(i).node());
+            renumberFixedRows();
+            selectFixedRow(Math.min(i, fixedRowList.size() - 1));
+            redrawMap();
+        });
+        Button fill = miniButton("= instancias");
+        fill.setOnAction(e -> {
+            if (fixedRowList.isEmpty()) addFixedRow(BobMap.WARP_X, BobMap.WARP_Z, BobMap.WARP_YAW);
+            while (fixedRowList.size() < instanceCount()) {
+                double[] last = rowValues(fixedRowList.get(fixedRowList.size() - 1));
+                addFixedRow(last[0], last[1], last[2]);
+            }
+            redrawMap();
+        });
+
+        Label tip = label("Click en el plano → fija X/Z de la fila activa", 10, TEXT2, false);
+
+        VBox v = new VBox(5, head, cols, sp, new HBox(6, add, del, fill), tip);
+        v.setStyle("-fx-background-color:transparent;");
+        return v;
+    }
+
+    private void addFixedRow(double x, double z, double yaw) {
+        Label n = label("", 11, TEXT2, false);
+        n.setMinWidth(26);
+        TextField tx   = coordField(x, 72);
+        TextField tz   = coordField(z, 72);
+        TextField tyaw = coordField(yaw, 56);
+
+        HBox node = new HBox(4, n, tx, tz, tyaw);
+        node.setAlignment(Pos.CENTER_LEFT);
+        SpawnRow row = new SpawnRow(node, n, tx, tz, tyaw);
+        fixedRowList.add(row);
+        fixedRows.getChildren().add(node);
+
+        for (TextField f : new TextField[] { tx, tz, tyaw }) {
+            f.textProperty().addListener((obs, o, nv) -> redrawMap());
+            f.focusedProperty().addListener((obs, was, is) -> {
+                if (is) selectFixedRow(fixedRowList.indexOf(row));
+            });
+        }
+        node.setOnMousePressed(e -> selectFixedRow(fixedRowList.indexOf(row)));
+
+        renumberFixedRows();
+        if (fixedRowList.size() == 1) selectFixedRow(0);
+    }
+
+    private void renumberFixedRows() {
+        for (int i = 0; i < fixedRowList.size(); i++) {
+            fixedRowList.get(i).idx().setText("#" + i);
+        }
+    }
+
+    /** The active row is the one a canvas click writes into; marked with the accent. */
+    private void selectFixedRow(int i) {
+        selectedFixedRow = Math.max(0, i);
+        for (int k = 0; k < fixedRowList.size(); k++) {
+            boolean on = (k == selectedFixedRow);
+            fixedRowList.get(k).node().setStyle(
+                "-fx-background-color:" + (on ? SURF_H : "transparent") + ";" +
+                "-fx-background-radius:4; -fx-padding:1 2 1 2;");
+        }
+    }
+
+    private VBox buildAreaPanel() {
+        Label head = label("Rectángulo XZ + semilla", 11, TEXT2, false);
+
+        // Defaults = the starting plain of BoB (walkable, has floor everywhere), so a
+        // first run in this mode cannot land every instance in the void.
+        areaX0 = coordSpinner(-6800);
+        areaZ0 = coordSpinner(4000);
+        areaX1 = coordSpinner(-2000);
+        areaZ1 = coordSpinner(6800);
+        seedSpinner = new Spinner<>(
+            new SpinnerValueFactory.IntegerSpinnerValueFactory(0, 999_999, 0, 1));
+        seedSpinner.setEditable(true);
+        seedSpinner.setPrefWidth(72);
+        seedSpinner.setMaxWidth(72);
+        seedSpinner.setAccessibleText("Semilla del muestreo aleatorio de spawns");
+        seedSpinner.focusedProperty().addListener((o, was, is) -> {
+            if (!is) seedSpinner.increment(0);
+        });
+        seedSpinner.valueProperty().addListener((o, a, b) -> redrawMap());
+
+        areaYField = new TextField("");
+        areaYField.getStyleClass().add("coord");
+        areaYField.setPromptText("auto");
+        areaYField.setPrefWidth(72);
+        areaYField.setMaxWidth(72);
+        areaYField.setAccessibleText("Altura Y fija; vacío = suelo automático");
+
+        GridPane g = new GridPane();
+        g.setHgap(6);
+        g.setVgap(5);
+        g.addRow(0, label("X0", 11, TEXT2, false), areaX0, label("Z0", 11, TEXT2, false), areaZ0);
+        g.addRow(1, label("X1", 11, TEXT2, false), areaX1, label("Z1", 11, TEXT2, false), areaZ1);
+        g.addRow(2, label("Seed", 11, TEXT2, false), seedSpinner,
+                    label("Y", 11, TEXT2, false), areaYField);
+
+        Label tip = label("Arrastra en el plano para dibujar el área", 10, TEXT2, false);
+
+        VBox v = new VBox(5, head, g, tip);
+        v.setStyle("-fx-background-color:transparent;");
+        return v;
+    }
+
+    private VBox buildPresetPanel() {
+        Label head = label("Presets de BoB (round-robin)", 11, TEXT2, false);
+        List<BobMap.Preset> ps = BobMap.PRESETS;
+        presetChecks = new CheckBox[ps.size()];
+        VBox list = new VBox(3);
+        for (int i = 0; i < ps.size(); i++) {
+            BobMap.Preset p = ps.get(i);
+            CheckBox cb = new CheckBox(p.label() + "  (" + (int) p.x() + ", " + (int) p.z() + ")");
+            cb.setSelected(true);
+            cb.getStyleClass().add("spawn-check");
+            cb.selectedProperty().addListener((o, a, b) -> redrawMap());
+            presetChecks[i] = cb;
+            list.getChildren().add(cb);
+        }
+        VBox v = new VBox(5, head, list);
+        v.setStyle("-fx-background-color:transparent;");
+        return v;
+    }
+
+    // ── Reading the controls ──────────────────────────────────
+    /** Tolerant parse: a half-typed "-" or "" must not blow up the redraw. */
+    private static double parseD(TextField f, double fallback) {
+        if (f == null) return fallback;
+        try {
+            return Double.parseDouble(f.getText().trim());
+        } catch (Exception e) {
+            return fallback;
+        }
+    }
+
+    private static double[] rowValues(SpawnRow r) {
+        return new double[] { parseD(r.x(), 0), parseD(r.z(), 0), parseD(r.yaw(), 0) };
+    }
+
+    private List<double[]> fixedValues() {
+        List<double[]> out = new ArrayList<>();
+        for (SpawnRow r : fixedRowList) out.add(rowValues(r));
+        return out;
+    }
+
+    /** {x0, z0, x1, z1} straight from the spinners. */
+    private double[] areaValues() {
+        return new double[] {
+            spinnerVal(areaX0, -6800), spinnerVal(areaZ0, 4000),
+            spinnerVal(areaX1, -2000), spinnerVal(areaZ1, 6800)
+        };
+    }
+
+    private static double spinnerVal(Spinner<Integer> s, double fallback) {
+        if (s == null || s.getValue() == null) return fallback;
+        return s.getValue();
+    }
+
+    private long seedValue() {
+        return (long) spinnerVal(seedSpinner, 0);
+    }
+
+    private List<BobMap.Preset> selectedPresets() {
+        List<BobMap.Preset> out = new ArrayList<>();
+        for (int i = 0; i < BobMap.PRESETS.size(); i++) {
+            if (presetChecks == null || presetChecks[i].isSelected()) out.add(BobMap.PRESETS.get(i));
+        }
+        return out;
+    }
+
+    /**
+     * Where every instance would appear right now: {x, z, yaw} indexed by instance.
+     * Mirrors spawn_args_for() in gymnasium_env/runner.py, including the round-robin
+     * and the per-instance seed derivation — the preview is useless if it drifts.
+     */
+    private List<double[]> spawnPoints() {
+        List<double[]> out = new ArrayList<>();
+        int n = instanceCount();
+        switch (spawnModeName()) {
+            case SP_FIXED -> {
+                List<double[]> rows = fixedValues();
+                if (rows.isEmpty()) return out;
+                for (int i = 0; i < n; i++) out.add(rows.get(i % rows.size()));
+            }
+            case SP_AREA -> {
+                double[] a = areaValues();
+                for (int i = 0; i < n; i++) {
+                    out.add(BobMap.sampleArea(a[0], a[1], a[2], a[3], seedValue(), i));
+                }
+            }
+            case SP_PRESET -> {
+                List<BobMap.Preset> ps = selectedPresets();
+                if (ps.isEmpty()) return out;
+                for (int i = 0; i < n; i++) {
+                    BobMap.Preset p = ps.get(i % ps.size());
+                    out.add(new double[] { p.x(), p.z(), p.yaw() });
+                }
+            }
+            default -> { /* SP_DEFAULT: the game's own warp, nothing to preview */ }
+        }
+        return out;
+    }
+
+    // ── World ↔ canvas ────────────────────────────────────────
+    private static double mapScale() {
+        return MAP_PX / (BobMap.WORLD_MAX - BobMap.WORLD_MIN);
+    }
+
+    private static double sx(double worldX) {
+        return (worldX - BobMap.WORLD_MIN) * mapScale();
+    }
+
+    /**
+     * +Z goes DOWN on screen on purpose: in SM64 the BoB start (z ≈ +6464) is the south
+     * plain and the summit (z ≈ -5567) is north, so this puts the mountain at the top,
+     * like every map of this level people have ever seen.
+     */
+    private static double sy(double worldZ) {
+        return (worldZ - BobMap.WORLD_MIN) * mapScale();
+    }
+
+    private static double worldXAt(double px) {
+        return BobMap.WORLD_MIN + px / mapScale();
+    }
+
+    private static double worldZAt(double py) {
+        return BobMap.WORLD_MIN + py / mapScale();
+    }
+
+    private static double clampWorld(double v) {
+        return Math.max(BobMap.WORLD_MIN, Math.min(BobMap.WORLD_MAX, v));
+    }
+
+    // ── Canvas input ──────────────────────────────────────────
+    private double dragStartX, dragStartZ;
+
+    private void onMapPressed(MouseEvent e) {
+        double wx = clampWorld(worldXAt(e.getX()));
+        double wz = clampWorld(worldZAt(e.getY()));
+        String m = spawnModeName();
+        if (SP_FIXED.equals(m)) {
+            if (fixedRowList.isEmpty()) addFixedRow(wx, wz, 0);
+            int i = Math.min(selectedFixedRow, fixedRowList.size() - 1);
+            SpawnRow r = fixedRowList.get(i);
+            r.x().setText(fmtCoord(wx));
+            r.z().setText(fmtCoord(wz));   // each setText triggers its own redraw
+        } else if (SP_AREA.equals(m)) {
+            dragStartX = wx;
+            dragStartZ = wz;
+            setSpinner(areaX0, wx); setSpinner(areaZ0, wz);
+            setSpinner(areaX1, wx); setSpinner(areaZ1, wz);
+            redrawMap();
+        }
+    }
+
+    private void onMapDragged(MouseEvent e) {
+        if (!SP_AREA.equals(spawnModeName())) return;
+        setSpinner(areaX0, dragStartX);
+        setSpinner(areaZ0, dragStartZ);
+        setSpinner(areaX1, clampWorld(worldXAt(e.getX())));
+        setSpinner(areaZ1, clampWorld(worldZAt(e.getY())));
+        redrawMap();
+    }
+
+    private static void setSpinner(Spinner<Integer> s, double v) {
+        if (s == null) return;
+        int iv = (int) Math.round(v);
+        if (s.getValueFactory() instanceof SpinnerValueFactory.IntegerSpinnerValueFactory f) {
+            iv = Math.max(f.getMin(), Math.min(f.getMax(), iv));
+        }
+        s.getValueFactory().setValue(iv);
+    }
+
+    // ── Drawing ───────────────────────────────────────────────
+    private static final Font TAG_FONT   = Font.font("monospace", FontWeight.BOLD, 9);
+    private static final Font INDEX_FONT = Font.font("monospace", FontWeight.BOLD, 9);
+
+    private void redrawMap() {
+        if (mapCanvas == null) return;
+        GraphicsContext g = mapCanvas.getGraphicsContext2D();
+        g.clearRect(0, 0, MAP_PX, MAP_PX);
+        g.setFill(Color.web(MAP_BG));
+        g.fillRect(0, 0, MAP_PX, MAP_PX);
+
+        // Grid every 1000 world units; the x=0 / z=0 axes a shade brighter.
+        g.setLineWidth(1);
+        for (double v = BobMap.WORLD_MIN; v <= BobMap.WORLD_MAX; v += BobMap.GRID_STEP) {
+            boolean axis = Math.abs(v) < 0.5;
+            g.setStroke(Color.web(axis ? MAP_AXIS : BORDER));
+            double p = Math.floor(sx(v)) + 0.5;
+            g.strokeLine(p, 0, p, MAP_PX);
+            g.strokeLine(0, p, MAP_PX, p);
+        }
+
+        // Area rectangle under everything else, so markers stay readable on top
+        if (SP_AREA.equals(spawnModeName())) {
+            double[] a = areaValues();
+            double x = sx(Math.min(a[0], a[2])), y = sy(Math.min(a[1], a[3]));
+            double w = Math.abs(sx(a[2]) - sx(a[0])), h = Math.abs(sy(a[3]) - sy(a[1]));
+            g.setFill(Color.web(ACCENT, 0.12));
+            g.fillRect(x, y, w, h);
+            g.setStroke(Color.web(ACCENT, 0.7));
+            g.strokeRect(x + 0.5, y + 0.5, w, h);
+        }
+
+        List<BobMap.Marker> enemies = BobMap.enemiesFor(selectedStarId());
+        for (BobMap.Marker m : enemies) drawMarker(g, m);
+
+        drawWarp(g);
+        drawSpawns(g);
+
+        rebuildLegend(enemies);
+        updateSpawnHint();
+    }
+
+    private void drawMarker(GraphicsContext g, BobMap.Marker m) {
+        double cx = sx(m.x()), cy = sy(m.z()), r = m.kind().r;
+        g.setFill(Color.web(m.kind().hex));
+        g.fillOval(cx - r, cy - r, r * 2, r * 2);
+        // Thin light outline: chain chomp is almost black and would vanish otherwise.
+        g.setStroke(Color.web("#000000", 0.55));
+        g.setLineWidth(1);
+        g.strokeOval(cx - r, cy - r, r * 2, r * 2);
+        if (m.tag() != null) {
+            g.setFill(Color.WHITE);
+            g.setFont(TAG_FONT);
+            g.setTextAlign(TextAlignment.CENTER);
+            g.fillText(m.tag(), cx, cy + 3.2);
+            g.setTextAlign(TextAlignment.LEFT);
+        }
+    }
+
+    /** The level's own warp, always drawn in grey as a reference point. */
+    private void drawWarp(GraphicsContext g) {
+        double cx = sx(BobMap.WARP_X), cy = sy(BobMap.WARP_Z);
+        g.setStroke(Color.web(WARP_COL));
+        g.setLineWidth(1.4);
+        g.strokeLine(cx - 5, cy, cx + 5, cy);
+        g.strokeLine(cx, cy - 5, cx, cy + 5);
+        g.strokeOval(cx - 4, cy - 4, 8, 8);
+    }
+
+    /**
+     * One yellow disc per spawn point with the instance indices inside. Instances that
+     * share a point (round-robin with fewer points than instances) are merged into a
+     * single "0,2" label instead of stacking unreadable circles on the same pixel.
+     */
+    private void drawSpawns(GraphicsContext g) {
+        List<double[]> pts = spawnPoints();
+        if (pts.isEmpty()) return;
+
+        List<double[]> uniq = new ArrayList<>();      // {x, z, yaw}
+        List<StringBuilder> labels = new ArrayList<>();
+        for (int i = 0; i < pts.size(); i++) {
+            double[] p = pts.get(i);
+            int hit = -1;
+            for (int k = 0; k < uniq.size(); k++) {
+                if (Math.abs(uniq.get(k)[0] - p[0]) < 1 && Math.abs(uniq.get(k)[1] - p[1]) < 1) {
+                    hit = k;
+                    break;
+                }
+            }
+            if (hit < 0) {
+                uniq.add(p);
+                labels.add(new StringBuilder(String.valueOf(i)));
+            } else {
+                labels.get(hit).append(',').append(i);
+            }
+        }
+
+        for (int k = 0; k < uniq.size(); k++) {
+            double[] p = uniq.get(k);
+            double cx = sx(p[0]), cy = sy(p[1]);
+            // Yaw tick: SM64 forward is (sin yaw, cos yaw) over (x, z), and +Z is down
+            // on this canvas, so the screen vector is (sin, cos) with no sign flip.
+            double rad = Math.toRadians(p[2]);
+            g.setStroke(Color.web(SPAWN_COL));
+            g.setLineWidth(1.6);
+            g.strokeLine(cx, cy, cx + Math.sin(rad) * 13, cy + Math.cos(rad) * 13);
+
+            double r = 7;
+            g.setFill(Color.web(SPAWN_COL));
+            g.fillOval(cx - r, cy - r, r * 2, r * 2);
+            g.setStroke(Color.web("#1A1A00"));
+            g.setLineWidth(1);
+            g.strokeOval(cx - r, cy - r, r * 2, r * 2);
+
+            g.setFill(Color.web("#201A00"));
+            g.setFont(INDEX_FONT);
+            g.setTextAlign(TextAlignment.CENTER);
+            g.fillText(labels.get(k).toString(), cx, cy + 3.2);
+            g.setTextAlign(TextAlignment.LEFT);
+        }
+    }
+
+    /** Legend limited to the kinds actually on screen for this act, 2 columns. */
+    private void rebuildLegend(List<BobMap.Marker> enemies) {
+        if (legendBox == null) return;
+        legendBox.getChildren().clear();
+        int i = 0;
+        for (BobMap.Kind k : BobMap.Kind.values()) {
+            boolean present = false;
+            for (BobMap.Marker m : enemies) {
+                if (m.kind() == k) { present = true; break; }
+            }
+            if (!present) continue;
+            legendBox.add(legendItem(k.hex, k.label), i % 2, i / 2);
+            i++;
+        }
+        legendBox.add(legendItem(WARP_COL, "warp nivel"), i % 2, i / 2);
+        i++;
+        legendBox.add(legendItem(SPAWN_COL, "spawn (nº inst)"), i % 2, i / 2);
+    }
+
+    private HBox legendItem(String hex, String text) {
+        Circle dot = new Circle(3.5, Color.web(hex));
+        HBox h = new HBox(5, dot, label(text, 10, TEXT2, false));
+        h.setAlignment(Pos.CENTER_LEFT);
+        return h;
+    }
+
+    private void updateSpawnHint() {
+        if (spawnHint == null) return;
+        int n = instanceCount();
+        String m = spawnModeName();
+        if (SP_DEFAULT.equals(m)) {
+            spawnHint.setText("sin --spawn-mode: warp del nivel en las " + n + " instancias");
+        } else if (SP_FIXED.equals(m)) {
+            int k = fixedRowList.size();
+            spawnHint.setText("fixed: " + k + (k == 1 ? " punto" : " puntos") + " → " + n
+                              + (n == 1 ? " instancia" : " instancias")
+                              + (k < n ? " (round-robin)" : ""));
+        } else if (SP_AREA.equals(m)) {
+            double[] a = areaValues();
+            spawnHint.setText("random_area: seed " + seedValue() + " · "
+                + (int) Math.abs(a[2] - a[0]) + "×" + (int) Math.abs(a[3] - a[1]) + " uds");
+        } else {
+            int k = selectedPresets().size();
+            spawnHint.setText(k == 0
+                ? "preset: ningún preset marcado → se ignoraría el spawn"
+                : "preset: " + k + " de " + BobMap.PRESETS.size() + " activos → " + n
+                  + (n == 1 ? " instancia" : " instancias"));
+        }
+    }
+
+    // ── Spawn flags handed to GameLauncher ────────────────────
+    private record SpawnCfg(GameLauncher.SpawnMode mode, List<double[]> spawns,
+                            double[] area, Double y, Long seed) {}
+
+    /**
+     * Translates the UI into runner flags.
+     *
+     * <p>One wrinkle: --spawn-mode preset has NO way to select a subset (runner.py owns
+     * the list). So all four boxes ticked → preset mode (let Python use its own table,
+     * which keeps the two in sync by construction); any subset → fixed mode carrying
+     * exactly the ticked coordinates. Same resulting spawns either way.
+     */
+    private SpawnCfg currentSpawnCfg() {
+        String m = spawnModeName();
+        if (SP_FIXED.equals(m)) {
+            List<double[]> out = new ArrayList<>();
+            for (double[] r : fixedValues()) {
+                out.add(new double[] { r[0], Double.NaN, r[1], r[2] });  // NaN = auto-floor
+            }
+            return new SpawnCfg(GameLauncher.SpawnMode.FIXED, out, null, null, null);
+        }
+        if (SP_AREA.equals(m)) {
+            double[] a = areaValues();
+            String yTxt = areaYField == null ? "" : areaYField.getText().trim();
+            Double y = null;
+            if (!yTxt.isEmpty()) {
+                try { y = Double.valueOf(yTxt); } catch (NumberFormatException ignored) { }
+            }
+            return new SpawnCfg(GameLauncher.SpawnMode.RANDOM_AREA, List.of(),
+                                a, y, seedValue());
+        }
+        if (SP_PRESET.equals(m)) {
+            List<BobMap.Preset> ps = selectedPresets();
+            if (ps.size() == BobMap.PRESETS.size()) {
+                return new SpawnCfg(GameLauncher.SpawnMode.PRESET, List.of(), null, null, null);
+            }
+            List<double[]> out = new ArrayList<>();
+            for (BobMap.Preset p : ps) {
+                out.add(new double[] { p.x(), Double.NaN, p.z(), p.yaw() });
+            }
+            return new SpawnCfg(GameLauncher.SpawnMode.FIXED, out, null, null, null);
+        }
+        return new SpawnCfg(GameLauncher.SpawnMode.DEFAULT, List.of(), null, null, null);
+    }
+
+    // ── Small styled controls used by the spawn panels ────────
+    private Label colHeader(String text, double w) {
+        Label l = label(text, 10, TEXT2, false);
+        l.setMinWidth(w);
+        l.setMaxWidth(w);
+        return l;
+    }
+
+    private TextField coordField(double value, double w) {
+        TextField f = new TextField(fmtCoord(value));
+        f.getStyleClass().add("coord");
+        f.setPrefWidth(w);
+        f.setMinWidth(w);
+        f.setMaxWidth(w);
+        return f;
+    }
+
+    private Spinner<Integer> coordSpinner(int def) {
+        Spinner<Integer> s = new Spinner<>(
+            new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                (int) BobMap.WORLD_MIN, (int) BobMap.WORLD_MAX, def, 100));
+        s.setEditable(true);
+        s.setPrefWidth(72);
+        s.setMaxWidth(72);
+        s.focusedProperty().addListener((o, was, is) -> {
+            if (!is) s.increment(0);
+        });
+        s.valueProperty().addListener((o, a, b) -> redrawMap());
+        return s;
+    }
+
+    private Button miniButton(String text) {
+        Button b = new Button(text);
+        b.setStyle(miniStyle(false));
+        b.setOnMouseEntered(e -> b.setStyle(miniStyle(true)));
+        b.setOnMouseExited(e  -> b.setStyle(miniStyle(false)));
+        return b;
+    }
+
+    private String miniStyle(boolean hover) {
+        return "-fx-background-color:" + (hover ? SURF_H : SURFACE) + ";" +
+               "-fx-text-fill:" + (hover ? TEXT1 : TEXT2) + ";" +
+               "-fx-font-family:monospace; -fx-font-size:10px;" +
+               "-fx-border-color:" + BORDER + "; -fx-border-width:1;" +
+               "-fx-background-radius:4; -fx-border-radius:4;" +
+               "-fx-cursor:hand; -fx-padding:2 7 2 7;" +
+               "-fx-focus-color:transparent; -fx-faint-focus-color:transparent;";
+    }
+
+    /** Integers print without ".0": the CLI takes both, but humans read these. */
+    private static String fmtCoord(double v) {
+        if (v == Math.rint(v)) return String.valueOf((long) v);
+        return String.format(java.util.Locale.ROOT, "%.1f", v);
     }
 
     // ── Speed control (spinner, 1×–100×) ───────────────────────
@@ -417,6 +1164,8 @@ public class LevelSelector extends Application {
             launchHint.setText(n == 1 ? "Ready to launch." : "Launching " + n + " instances.");
         }
         updateLoadTexts();
+        // The map draws one marker per instance, so the instance count is an input to it.
+        redrawMap();
     }
 
     // ── Launch row ─────────────────────────────────────────────
@@ -453,6 +1202,7 @@ public class LevelSelector extends Application {
             // Only route left: Java owns ONE python process; python owns the N instances.
             // renderToggle selected == "sin render", so --render goes when NOT selected.
             boolean render = renderToggle == null || !renderToggle.isSelected();
+            SpawnCfg sp = currentSpawnCfg();
             runTraining(new GameLauncher.TrainingConfig(
                 GameLauncher.DEFAULT_ENV_ID,
                 LEVELS[idx].courseId,
@@ -464,7 +1214,12 @@ public class LevelSelector extends Application {
                 RL_EPISODES,
                 RL_MAX_STEPS,
                 RL_ALGO_ARG,
-                "rl_" + System.currentTimeMillis()
+                "rl_" + System.currentTimeMillis(),
+                sp.mode(),
+                sp.spawns(),
+                sp.area(),
+                sp.y(),
+                sp.seed()
             ));
         });
 

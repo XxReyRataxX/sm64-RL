@@ -12,6 +12,7 @@
 #include "game/camera.h"
 #include "seq_ids.h"
 #include "dialog_ids.h"
+#include "pc/no_music.h"
 
 #if defined(VERSION_EU) || defined(VERSION_SH)
 #define EU_FLOAT(x) x##f
@@ -1752,6 +1753,14 @@ static void seq_player_play_sequence(u8 player, u8 seqId, u16 arg2) {
 
     for (i = 0; i < CHANNELS_MAX; i++) {
         D_80360928[player][i].remainingFrames = 0;
+    }
+
+    // RL (--no-music): no arrancar la reproduccion de musica de nivel ni de
+    // jingles. La contabilidad de arriba ya se hizo, asi que
+    // get_current_background_music() y la cola de musica siguen coherentes.
+    // El player de SFX se deja intacto. Ver src/pc/no_music.h.
+    if (gNoMusic && player != SEQ_PLAYER_SFX) {
+        return;
     }
 
 #if defined(VERSION_EU) || defined(VERSION_SH)

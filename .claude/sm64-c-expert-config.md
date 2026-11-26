@@ -88,6 +88,8 @@ if (strcmp(argv[i], "--level") == 0 && i + 1 < argc) {
 | `--level <n>` | `s8` | `gAutoStartLevelNum` (+ `gDebugLevelSelect = 1`) | sin clamp |
 | `--star <n>` | `s8` | `gAutoStartActNum` → `gCurrActNum` | clamp 1–6 |
 | `--speed <f>` | `float` | `gSpeedMultiplier` | clamp 1.0–100.0 |
+| `--no-render` | flag | `gNoRender = 1` | backend gráfico dummy |
+| `--no-music` | flag | `gNoMusic = 1` | silencia música + jingles (ver §12) |
 
 ### `--speed` y el throughput
 
@@ -259,6 +261,7 @@ Scripts disponibles en `.claude/scripts/`:
 | 2026-11-25 | Corregido clamp de `--speed` en §2 (era 1.0–5.0, el real es 1.0–100.0) + anotado el límite de 5.0× del slider de la UI y el throughput medido | doc only (`pc_main.c:276`, `LevelSelector.java:298`) |
 | 2026-11-26 | Sistema de enemigos en la shm: `struct RLEnemy` + 16 slots ordenados por distancia, `RL_STATE_VERSION 2→3`, `SHM_FMT` actualizado → ver §10 en `sm64-c-expert-rl-state.md` | `src/pc/rl_state.h`, `src/pc/rl_state.c`, `gymnasium_env/envs/sm64_connection.py` |
 | 2026-11-25 | Eliminado el modo Manual de la UI: §2 reescrita (Java ya no lanza el binario, lanza el runner de Python; velocidad por Spinner 1–100; `GameLauncher.launch`/`showError` borrados) | doc only (`LevelSelector.java`, `GameLauncher.java`) |
+| 2026-11-26 | Añadido flag `--no-music` + global `gNoMusic` (silencia música de nivel y jingles, mantiene SFX) → ver §12 | `src/pc/no_music.h` (nuevo), `src/pc/pc_main.c`, `src/audio/external.c` |
 
 ---
 
@@ -268,4 +271,49 @@ Scripts disponibles en `.claude/scripts/`:
 > antes de tocar `rl_state.*`, `controller_rl.c`, los flags
 > `--state-shm`/`--state-sync`, o el lado Python del bridge. No hace falta
 > cargarlo para tareas normales de niveles, args CLI o build (§1-§8).
+
+---
+
+## 12. Audio desactivado para RL (`--no-music`)
+
+**Decisión: Opción A (flag CLI opt-in).** El juego sigue sonando normal para humanos;
+el RL añade `--no-music` y se queda sin música.
+
+| Pieza | Dónde |
+|-------|-------|
+| Global `s8 gNoMusic = 0` | `src/pc/pc_main.c` (junto a `gNoRender`) |
+| Parsing `--no-music` | `src/pc/pc_main.c`, cadena `else if` de `main()` (tras `--no-render`) |
+| `extern` + doc del contrato | `src/pc/no_music.h` (nuevo, patrón de `spawn_override.h`) |
+| Hook | `src/audio/external.c`, `seq_player_play_sequence()` |
+
+**Por qué ese hook:** `seq_player_play_sequence()` (static, `external.c`) es el **único**
+chokepoint por el que arrancan todas las secuencias del juego; el argumento `player`
+las separa: `SEQ_PLAYER_LEVEL` (0) música de fondo, `SEQ_PLAYER_ENV` (1) jingles
+(estrella, puzzle, carrera, Peach, Koopa…), `SEQ_PLAYER_SFX` (2) el reproductor de
+efectos. Toda la API pública (`play_music`, `play_star_fanfare`, `play_course_clear`,
+`play_power_star_jingle`…) desemboca ahí. Un único `if` cubre música + jingles sin
+tocar los SFX:
+
+```c
+if (gNoMusic && player != SEQ_PLAYER_SFX) {
+    return;
+}
+```
+
+**Posición exacta del `return`:** después del bloque de contabilidad
+(`sCurrentBackgroundMusicSeqId`, `sBackgroundMusicForDynamics`, `sMusicDynamicDelay`
+y el reset de `D_80360928[player][i].remainingFrames`) y antes del
+`load_sequence()` / arranque real. Así `get_current_background_music()`, la cola
+`sBackgroundMusicQueue` y `process_level_music_dynamics()` mantienen el mismo estado
+que el juego original — solo no suena nada. Importa porque
+`src/game/level_update.c:445,585-611` decide con `get_current_background_music()` si
+reinicia la música al cambiar de área (son comparaciones por frame, sin bucles de
+espera: no hay riesgo de soft-lock).
+
+**No se usó Opción B** (volumen 0 / mute global) porque `set_audio_muted()` silencia
+también los SFX y se resetea en varios puntos del juego (pausa, `sound_reset`),
+así que no es un off estable.
+
+**No afecta al ABI de `rl_state`.** Es input por CLI, igual que `--spawn-*`.
+Falta (si se quiere): propagarlo desde `gymnasium_env/runner.py` y la UI JavaFX.
 

@@ -55,6 +55,11 @@ float gSpeedMultiplier = 1.0f;
 // Headless mode: when 1 the dummy graphics backend is used (no window, no GPU)
 s8 gNoRender = 0;
 
+// Silenciado de musica para RL (--no-music): la consume
+// seq_player_play_sequence() en src/audio/external.c; ver src/pc/no_music.h.
+// Los SFX NO se tocan.
+s8 gNoMusic = 0;
+
 // Override del spawn de Mario (--spawn-x / --spawn-y / --spawn-z / --spawn-yaw).
 // Lo consume init_mario() en src/game/mario.c; ver src/pc/spawn_override.h.
 s8 gSpawnOverride = 0;
@@ -306,6 +311,8 @@ int main(int argc, char *argv[]) {
             if (gSpeedMultiplier > 100.0f) gSpeedMultiplier = 100.0f;
         } else if (strcmp(argv[i], "--no-render") == 0) {
             gNoRender = 1;
+        } else if (strcmp(argv[i], "--no-music") == 0) {
+            gNoMusic = 1;
         } else if (strcmp(argv[i], "--state-shm") == 0 && i + 1 < argc) {
             sRLShmName = argv[++i];
         } else if (strcmp(argv[i], "--state-sync") == 0) {
