@@ -14,4 +14,7 @@ dependencies = [
   "pre-commit",
   # IPC con el juego: shm POSIX + semaforos (gymnasium_env/envs/sm64_connection.py)
   "posix-ipc>=1.1; sys_platform != 'win32'",
+  # RL: stable-baselines3 trae PyTorch como dependencia (PPO, DQN, etc.)
+  "stable-baselines3>=2.3.0",
+  "torch>=2.0",
 ]

@@ -6,6 +6,7 @@
 // -----------------------------------------------------------------------------
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,12 +19,27 @@
 #include <signal.h>
 
 #include "sm64.h"
+#include "types.h"
+#include "object_fields.h"
+#include "object_constants.h"
+#include "behavior_data.h"
 
 #include "game/level_update.h"
 #include "game/area.h"
 #include "game/game_init.h"
+#include "game/object_list_processor.h"
+#include "game/object_helpers.h"
+#include "engine/math_util.h"
 
 #include "rl_state.h"
+
+// --- Guardas de ABI ----------------------------------------------------------
+// El layout de la shm es un contrato con Python (SHM_FMT en
+// gymnasium_env/envs/sm64_connection.py). Si alguien cambia un campo y se olvida
+// del lado Python, al menos que no compile en silencio con otro tamaño.
+typedef char rl_abi_check_enemy[(sizeof(struct RLEnemy) == 28) ? 1 : -1];
+typedef char rl_abi_check_actionbits[
+    (offsetof(struct RLStateShm, actionBits) == sizeof(struct RLStateShm) - 4) ? 1 : -1];
 
 // --- Estado del módulo -------------------------------------------------------
 
@@ -66,6 +82,135 @@ static int action_in_set(uint32_t actionId, const uint32_t *set, size_t count) {
         }
     }
     return 0;
+}
+
+// --- Recoleccion de enemigos --------------------------------------------------
+//
+// Se recorren solo las tres object lists donde viven los enemigos que nos
+// interesan: PUSHABLE (koopas y bob-ombs empujables), GENACTOR (goombas, chain
+// chomp, King Bob-omb) y DESTRUCTIVE (bob-ombs que explotan). El resto de listas
+// (LEVEL, POLELIKE, SURFACE, UNIMPORTANT, PLAYER...) no contiene enemigos, asi
+// que escanearlas seria coste por frame sin informacion.
+//
+// NO se usan oDistanceToMario / oAngleToMario: son campos de scratch que varios
+// behaviors sobreescriben con valores centinela (treat_far_home_as_mario() pone
+// 20000/25000 en obj_behaviors_2.c, spawn_object.c pone 19000). Se recalculan
+// aqui desde las posiciones, que si son verdad siempre.
+
+static const s32 sRLEnemyLists[] = {
+    OBJ_LIST_PUSHABLE,
+    OBJ_LIST_GENACTOR,
+    OBJ_LIST_DESTRUCTIVE,
+};
+
+// Clasifica un objeto en un RL_ENEMY_*. Devuelve RL_ENEMY_NONE si no nos
+// interesa (lo cual es el caso de la gran mayoria de objetos de las listas).
+static uint8_t rl_enemy_type_of(struct Object *obj) {
+    if (obj_has_behavior(obj, bhvGoomba)) {
+        return RL_ENEMY_GOOMBA;
+    }
+    if (obj_has_behavior(obj, bhvChainChomp)) {
+        return RL_ENEMY_CHAIN_CHOMP;
+    }
+    if (obj_has_behavior(obj, bhvKingBobomb)) {
+        return RL_ENEMY_KING_BOBOMB;
+    }
+    if (obj_has_behavior(obj, bhvBobomb)) {
+        return RL_ENEMY_BOBOMB;
+    }
+    if (obj_has_behavior(obj, bhvKoopa)) {
+        // MISMO ORDEN DE COMPROBACION que bhv_koopa_init() (koopa.inc.c:72-81):
+        // KOOPA_BP_TINY (4) se evalua ANTES del rango de Koopa the Quick, porque
+        // 4 >= KOOPA_BP_KOOPA_THE_QUICK_BASE (2) tambien seria cierto y el
+        // koopa diminuto de THI acabaria clasificado como el NPC de la carrera.
+        if (obj->oBehParams2ndByte == KOOPA_BP_TINY) {
+            return RL_ENEMY_KOOPA;
+        }
+        if (obj->oBehParams2ndByte >= KOOPA_BP_KOOPA_THE_QUICK_BASE) {
+            return RL_ENEMY_KOOPA_THE_QUICK;
+        }
+        return RL_ENEMY_KOOPA;
+    }
+    return RL_ENEMY_NONE;
+}
+
+// Rellena sShm->numEnemies y sShm->enemies[] con los RL_MAX_ENEMIES enemigos mas
+// cercanos a Mario, ordenados por distancia ascendente.
+//
+// Se usa insercion directa sobre un buffer de 16 en vez de "recolectar todo y
+// ordenar": el coste esta acotado por diseño (no hay array temporal que pueda
+// desbordarse si un area tiene decenas de enemigos) y el resultado es el mismo.
+static void rl_collect_enemies(struct MarioState *m) {
+    struct RLEnemy best[RL_MAX_ENEMIES];
+    uint32_t count = 0;
+    size_t li;
+
+    memset(best, 0, sizeof(best));
+
+    if (m == NULL || gObjectLists == NULL) {
+        sShm->numEnemies = 0;
+        memset(sShm->enemies, 0, sizeof(sShm->enemies));
+        return;
+    }
+
+    for (li = 0; li < sizeof(sRLEnemyLists) / sizeof(sRLEnemyLists[0]); li++) {
+        struct ObjectNode *listHead = &gObjectLists[sRLEnemyLists[li]];
+        struct ObjectNode *node     = listHead->next;
+
+        while (node != NULL && node != listHead) {
+            struct Object *obj = (struct Object *) node;
+            node = node->next;
+
+            // ACTIVE_FLAG_DEACTIVATED == 0: objeto en la lista pero ya muerto,
+            // pendiente de que unload_deactivated_objects_in_list() lo saque.
+            if (obj->activeFlags == ACTIVE_FLAG_DEACTIVATED) {
+                continue;
+            }
+
+            uint8_t type = rl_enemy_type_of(obj);
+            if (type == RL_ENEMY_NONE) {
+                continue;
+            }
+
+            f32 dx = (f32) m->pos[0] - obj->oPosX;
+            f32 dy = (f32) m->pos[1] - obj->oPosY;
+            f32 dz = (f32) m->pos[2] - obj->oPosZ;
+            f32 dist = sqrtf(dx * dx + dy * dy + dz * dz);
+
+            // Si ya tenemos 16 y este esta mas lejos que el peor, se descarta.
+            if (count == RL_MAX_ENEMIES && dist >= best[RL_MAX_ENEMIES - 1].distToMario) {
+                continue;
+            }
+
+            struct RLEnemy e;
+            e.type        = type;
+            e.active      = 1;
+            e._pad[0]     = 0;
+            e._pad[1]     = 0;
+            e.pos[0]      = (float) obj->oPosX;
+            e.pos[1]      = (float) obj->oPosY;
+            e.pos[2]      = (float) obj->oPosZ;
+            e.distToMario = (float) dist;
+            // Angulo enemigo->Mario, relativo a la cara de Mario. El cast a s16
+            // es el que hace el wrap correcto del angulo binario de N64.
+            e.angleToMario = (int32_t) (s16) (atan2s(dz, dx) - m->faceAngle[1]);
+            e.action       = (uint32_t) obj->oAction;
+
+            // Insercion ordenada por distToMario ascendente.
+            uint32_t slot = (count < RL_MAX_ENEMIES) ? count : RL_MAX_ENEMIES - 1;
+            while (slot > 0 && best[slot - 1].distToMario > dist) {
+                best[slot] = best[slot - 1];
+                slot--;
+            }
+            best[slot] = e;
+            if (count < RL_MAX_ENEMIES) {
+                count++;
+            }
+        }
+    }
+
+    sShm->numEnemies = count;
+    memcpy(sShm->enemies, best, sizeof(best));
 }
 
 // --- Barreras de memoria -----------------------------------------------------
@@ -279,8 +424,20 @@ void rl_state_publish(void) {
                                                       sizeof(sStarActions) / sizeof(sStarActions[0])));
 
         sShm->inAir = (uint8_t)(inLevel && (m->action & ACT_FLAG_AIR) != 0);
+
+        // Mismo contrato que las demas banderas derivadas: fuera del nivel los
+        // objetos no existen (o son los del area anterior a medio descargar), asi
+        // que el bloque de enemigos se publica vacio en vez de con basura.
+        if (inLevel) {
+            rl_collect_enemies(m);
+        } else {
+            sShm->numEnemies = 0;
+            memset(sShm->enemies, 0, sizeof(sShm->enemies));
+        }
     } else {
         sShm->inLevel = 0;
+        sShm->numEnemies = 0;
+        memset(sShm->enemies, 0, sizeof(sShm->enemies));
     }
 
     // Asegura que todas las escrituras del estado sean visibles antes del post.

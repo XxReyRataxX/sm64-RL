@@ -122,22 +122,38 @@ tipos de ancho fijo de `<stdint.h>` y **no** los aliases del codebase (`s8`/`s16
 | `floorAngle` | `int32_t` | `m->floorAngle` |
 | `flags`, `input` | `uint32_t` | `gMarioState` |
 | `isDead`, `starCollected`, `inLevel`, `inAir` | `uint8_t` ×4 | derivados (§9.8). Cubren 4 bytes exactos, sin `_pad` |
-| `actionBits` | `uint32_t` | **escrito por Python** |
+| `numEnemies` | `uint32_t` | derivado, guardado por `inLevel` (§10) |
+| `enemies[16]` | `struct RLEnemy` | derivado, guardado por `inLevel` (§10) |
+| `actionBits` | `uint32_t` | **escrito por Python**. Siempre el ÚLTIMO campo |
 
-**Regla dura:** no reordenar ni insertar campos sin subir `RL_STATE_VERSION` (hoy `2`),
+**Regla dura:** no reordenar ni insertar campos sin subir `RL_STATE_VERSION` (hoy `3`),
 y `SHM_FMT` en `gymnasium_env/envs/sm64_connection.py` tiene que cambiar **en el mismo
 commit**.
 
-Datos verificados (2026-11-25, x86-64 Linux):
+`actionBits` se mantiene como último campo **a propósito**: así el lado Python puede
+calcular `ACTIONBITS_OFFSET = SHM_SIZE - 4` sin duplicar el formato, y cualquier bloque
+de datos nuevo se inserta antes de él. Hay dos guardas de ABI en tiempo de compilación
+al principio de `rl_state.c` (`typedef char rl_abi_check_*[... ? 1 : -1]`, truco de array
+de tamaño negativo porque el syntax-check del Makefile no garantiza C11) que validan
+`sizeof(struct RLEnemy) == 28` y `offsetof(actionBits) == sizeof - 4`. El lado Python
+tiene tres `assert` equivalentes.
+
+Datos verificados (2026-11-26, x86-64 Linux, versión 3):
 
 ```
-sizeof(struct RLStateShm)              == 96
-offsetof(struct RLStateShm, actionBits) == 92
+sizeof(struct RLEnemy)                  == 28
+sizeof(struct RLStateShm)               == 548
 offsetof(struct RLStateShm, isDead)     == 88
-Python: SHM_FMT = '<IIIfffffffiiiIIIIiiiIIBBBBI'
-        struct.calcsize(SHM_FMT)                        == 96   ✓
-        ACTIONBITS_OFFSET = calcsize(SHM_FMT sin la 'I') == 92   ✓
+offsetof(struct RLStateShm, numEnemies) == 92
+offsetof(struct RLStateShm, enemies)    == 96
+offsetof(struct RLStateShm, actionBits) == 544
+Python: SHM_FMT = '<IIIfffffffiiiIIIIiiiIIBBBB' + 'I' + 'BBxx3ffiI'*16 + 'I'
+        struct.calcsize(SHM_FMT)   == 548   ✓
+        ACTIONBITS_OFFSET          == 544   ✓
 ```
+
+Histórico (versión 2, por si hay binarios viejos rondando): `sizeof == 96`,
+`offsetof(actionBits) == 92`, `SHM_FMT = '<IIIfffffffiiiIIIIiiiIIBBBBI'`.
 
 ### 9.7 Codificación de `actionBits` y backend de input
 
@@ -244,4 +260,214 @@ instala solo en caso de éxito, para no alterar el comportamiento del juego en m
   Decisión deliberada para que la propiedad del proceso no quede partida en dos.
   (`GameLauncher` conserva además un camino legacy que sí lanza el binario directo, fuera
   del flujo RL.)
+
+---
+
+## §10 Sistema de enemigos
+
+> Añadido en `RL_STATE_VERSION 3` (2026-11-26). Implementado en
+> `src/pc/rl_state.h` (`struct RLEnemy`, `RL_MAX_ENEMIES`, `RL_ENEMY_*`) y
+> `src/pc/rl_state.c` (`rl_collect_enemies()`, `rl_enemy_type_of()`).
+> El `observation_space` de Gymnasium **todavía no** consume este bloque: el ABI
+> ya lo transporta y `SHM_FMT` ya lo parsea, pero el entorno lo ignora.
+
+### 10.1 ABI de `struct RLEnemy`
+
+**28 bytes por slot**, alineación 4. El `_pad[2]` es explícito para que el layout no
+dependa del padding que elija el compilador.
+
+| Offset | Campo | Tipo | Significado |
+|--------|-------|------|-------------|
+| 0 | `type` | `uint8_t` | `RL_ENEMY_*`; `0` ⇒ slot vacío, ignora el resto |
+| 1 | `active` | `uint8_t` | `1` si `activeFlags != ACTIVE_FLAG_DEACTIVATED` |
+| 2 | `_pad[2]` | `uint8_t` ×2 | relleno |
+| 4 | `pos[3]` | `float` ×3 | `oPosX` / `oPosY` / `oPosZ` |
+| 16 | `distToMario` | `float` | distancia euclídea 3D a `gMarioState->pos` |
+| 20 | `angleToMario` | `int32_t` | `(s16)(atan2s(dz,dx) - m->faceAngle[1])` |
+| 24 | `action` | `uint32_t` | `oAction` del objeto (semántica propia de cada behavior) |
+
+Formato Python por slot: **`BBxx3ffiI`** (28 B). En `sm64_connection.py` está en
+`ENEMY_FMT`, y los campos se exponen como `e<i>_type`, `e<i>_active`, `e<i>_pos0..2`,
+`e<i>_dist`, `e<i>_angle`, `e<i>_action`. Hay un helper `enemy_slots(state)` que
+devuelve la lista de dicts ya recortada a `numEnemies`.
+
+### 10.2 Tabla de `type`
+
+| Valor | Constante C | Behavior | Nota |
+|-------|-------------|----------|------|
+| 0 | `RL_ENEMY_NONE` | — | slot vacío |
+| 1 | `RL_ENEMY_GOOMBA` | `bhvGoomba` | |
+| 2 | `RL_ENEMY_KOOPA` | `bhvKoopa` | `oBehParams2ndByte` ∈ {0 unshelled, 1 normal, 4 tiny} |
+| 3 | `RL_ENEMY_KOOPA_THE_QUICK` | `bhvKoopa` | `oBehParams2ndByte` ∈ {2 BoB, 3 THI} |
+| 4 | `RL_ENEMY_CHAIN_CHOMP` | `bhvChainChomp` | |
+| 5 | `RL_ENEMY_KING_BOBOMB` | `bhvKingBobomb` | jefe del acto 1 |
+| 6 | `RL_ENEMY_BOBOMB` | `bhvBobomb` | bob-omb negro hostil |
+
+### 10.3 Slots: 16 fijos, ordenados por distancia
+
+`RL_MAX_ENEMIES = 16`. El ABI de la shm tiene que tener tamaño constante, así que se
+exponen **siempre** 16 slots y los que sobran llevan `type = 0`.
+
+- Los slots están **ordenados por `distToMario` ascendente**: el slot 0 es siempre el
+  enemigo más cercano a Mario.
+- `numEnemies` = número de slots válidos (≤ 16). **`numEnemies == 16` significa
+  "16 o más enemigos presentes"**, no "exactamente 16": solo se exponen los 16 más
+  cercanos. BoB llega a los 16 slots con facilidad (11 `macro_bobomb` + 2
+  `macro_goomba` + 3 `macro_goomba_triplet_spawner` + chain chomp + jefe).
+- `rl_collect_enemies()` hace **inserción ordenada directa sobre un buffer local de 16**,
+  no "recolectar todo y ordenar". Motivo: el coste queda acotado por diseño y no hay
+  array temporal que pueda desbordarse si un área tiene decenas de enemigos. El
+  resultado es idéntico.
+- El bloque está **guardado por `inLevel`** igual que `isDead`/`inAir` (§9.8): fuera del
+  nivel `numEnemies = 0` y `enemies[]` se pone a cero, en vez de publicar los objetos
+  del área anterior a medio descargar.
+
+### 10.4 Cómo se iteran las object lists
+
+Se recorren **solo tres** de las `NUM_OBJ_LISTS` listas (`src/game/object_list_processor.h`):
+
+| Lista | Por qué |
+|-------|---------|
+| `OBJ_LIST_PUSHABLE` | koopas y bob-ombs empujables |
+| `OBJ_LIST_GENACTOR` | goombas, chain chomp, King Bob-omb |
+| `OBJ_LIST_DESTRUCTIVE` | bob-ombs que explotan |
+
+Las demás (`LEVEL`, `POLELIKE`, `SURFACE`, `UNIMPORTANT`, `PLAYER`, `SPAWNER`…) no
+contienen enemigos de interés; escanearlas sería coste por frame sin información.
+Mario vive en `OBJ_LIST_PLAYER`, que no se toca.
+
+Patrón de iteración (lista circular doblemente enlazada con nodo centinela, copiado de
+`unload_deactivated_objects_in_list()`):
+
+```c
+struct ObjectNode *listHead = &gObjectLists[OBJ_LIST_GENACTOR];
+struct ObjectNode *node     = listHead->next;
+while (node != NULL && node != listHead) {
+    struct Object *obj = (struct Object *) node;
+    node = node->next;                 // avanzar ANTES de tocar obj
+    if (obj->activeFlags == ACTIVE_FLAG_DEACTIVATED) continue;
+    ...
+}
+```
+
+`ACTIVE_FLAG_DEACTIVATED == 0` (`include/object_constants.h:8`): es un objeto que sigue
+en la lista pero ya está muerto, pendiente de que
+`unload_deactivated_objects_in_list()` lo saque. Hay que saltarlo o publicarías enemigos
+fantasma durante un frame.
+
+`gObjectLists` es `extern struct ObjectNode *gObjectLists` y apunta a `gObjectListArray`;
+se comprueba `!= NULL` por si se publica antes de `clear_objects()`.
+
+### 10.5 Filtro por behavior
+
+Se usa **`obj_has_behavior(obj, bhvX)`**, no `obj->behavior == bhvX`. Razón: el campo
+`behavior` guarda la dirección ya traducida (`segmented_to_virtual()`), y el helper
+aplica la misma traducción antes de comparar. En PC con `NO_SEGMENTED_MEMORY` la
+traducción es identidad y el `==` crudo funcionaría, pero el helper es el idioma canónico
+del codebase y no se rompe si eso cambia.
+
+**Behaviors incluidos:** `bhvGoomba`, `bhvKoopa`, `bhvChainChomp`, `bhvKingBobomb`,
+`bhvBobomb`.
+
+**Behaviors Bob-omb deliberadamente EXCLUIDOS** (existen todos en
+`include/behavior_data.h`):
+
+| Behavior | Por qué se excluye |
+|----------|--------------------|
+| `bhvBobombBuddy` | Bob-omb rosa amistoso (diálogo). No puede dañar a Mario. BoB tiene dos |
+| `bhvBobombBuddyOpensCannon` | Variante del anterior en actos 2–6 |
+| `bhvBobombAnchorMario` | Sub-objeto invisible del agarre de King Bob-omb, no una entidad |
+| `bhvBobombFuseSmoke`, `bhvBobombExplosionBubble`, `bhvBobombExplosionBubble3600`, `bhvBobombBullyDeathSmoke` | Partículas, no enemigos |
+| `bhvGoombaTripletSpawner` | Spawner invisible; sus goombas sí se detectan al nacer |
+
+### 10.6 Koopa: el orden de comprobación NO es libre
+
+```c
+if (obj->oBehParams2ndByte == KOOPA_BP_TINY)                      -> RL_ENEMY_KOOPA
+if (obj->oBehParams2ndByte >= KOOPA_BP_KOOPA_THE_QUICK_BASE)      -> RL_ENEMY_KOOPA_THE_QUICK
+else                                                              -> RL_ENEMY_KOOPA
+```
+
+Constantes (`include/object_constants.h:576-581`): `UNSHELLED 0`, `NORMAL 1`,
+`KOOPA_THE_QUICK_BASE 2` (BoB = 2, THI = 3), **`TINY 4`**.
+
+`KOOPA_BP_TINY` vale **4**, que también cumple `>= 2`. Si se comprobara el rango de
+Koopa the Quick primero, el koopa diminuto de THI quedaría clasificado como el NPC de la
+carrera. Este es exactamente el mismo orden que usa `bhv_koopa_init()`
+(`src/game/behaviors/koopa.inc.c:72-81`), que evalúa `== KOOPA_BP_TINY` antes del rango.
+
+**Koopa the Quick no es hostil**: es el NPC de la carrera del acto 2, no hace daño por
+contacto. Se expone como `type` separado (3) justamente para que la política pueda
+distinguirlo de un koopa normal y no aprenda a huir de él — o pueda usarlo como
+referencia de trazada en la estrella 2.
+
+### 10.7 `distToMario` y `angleToMario` se CALCULAN, no se leen del objeto
+
+**No se usan `oDistanceToMario` ni `oAngleToMario`.** Son campos de scratch que varios
+behaviors sobreescriben con valores centinela:
+
+- `treat_far_home_as_mario()` (`src/game/obj_behaviors_2.c:877-896`) pone
+  `oDistanceToMario = 25000.0f` si el objeto está lejos de casa, o `20000.0f` si Mario
+  está lejos, y `oAngleToMario = atan2s` **hacia su casa**, no hacia Mario.
+- `src/game/spawn_object.c:321` lo inicializa a `19000.0f`.
+- Varios behaviors (`chuckya.inc.c`, etc.) lo reasignan a su antojo.
+
+Por eso `rl_collect_enemies()` recalcula ambos desde las posiciones, que sí son verdad
+siempre:
+
+```c
+f32 dx = m->pos[0] - obj->oPosX;   // etc.
+dist   = sqrtf(dx*dx + dy*dy + dz*dz);
+angle  = (int32_t)(s16)(atan2s(dz, dx) - m->faceAngle[1]);
+```
+
+El `atan2s(dz, dx)` con `d = Mario - enemigo` es la misma convención que
+`obj_angle_to_object(enemigo, Mario)` (`object_helpers.c:383`). El cast a `s16` antes del
+`int32_t` es el que hace el **wrap correcto del ángulo binario de N64**: sin él, la resta
+de dos `s32` se saldría del rango ±32768. Semántica: ángulo *del enemigo hacia Mario*
+relativo a la cara de Mario; el ángulo *de Mario hacia el enemigo* es este + `0x8000`
+(información equivalente, difieren en una constante).
+
+### 10.8 Enemigos de Bob-omb Battlefield por acto
+
+Fuente: `levels/bob/script.c` (`OBJECT_WITH_ACTS`) + `levels/bob/areas/1/macro.inc.c`.
+Los **macro objects no tienen filtro de acto**: están en los seis.
+
+| Enemigo | Cantidad | Actos | Origen |
+|---------|----------|-------|--------|
+| Bob-omb (`bhvBobomb`) | 11 | 1–6 | `macro_bobomb` |
+| Goomba (`bhvGoomba`) | 2 sueltos + 3 spawners de tripleta (≤ 9 más) | 1–6 | `macro_goomba`, `macro_goomba_triplet_spawner` |
+| Chain Chomp (`bhvChainChomp`) | 1 | 1–6 | `macro_chain_chomp` @ (260, 735, 1920) |
+| King Bob-omb (`bhvKingBobomb`) | 1 | **solo ACT_1** | `script.c:48` @ (1636, 4242, −5567) |
+| Koopa the Quick (`bhvKoopa`, bp2 = 2) | 1 | **solo ACT_2** | `script.c:49` @ (−4004, 0, 5221) |
+| Koopa normal (`bhvKoopa`, bp2 = 1) | 1 | **ACT_3–6** | `script.c:43` @ (3400, 770, 6500) |
+| Bob-omb Buddy (rosa, **excluido**) | 2 | 1–6 | `script.c:36-39` |
+
+Los goombas de los `macro_goomba_triplet_spawner` **solo existen cuando Mario está
+cerca**, así que el conteo real fluctúa durante el episodio.
+
+Verificado en caliente (headless, `--speed 20`, frame ~205):
+
+| Acto | Slot 0 observado | Tipos presentes |
+|------|------------------|-----------------|
+| 1 | goomba (`type=1`, dist 3936) | 1, 4, 5, 6 — `numEnemies = 16` |
+| 2 | **Koopa the Quick** (`type=3`, dist 2840) | 1, 3, 4, 6 — `numEnemies = 16` |
+
+### 10.9 Regla de versión (recordatorio)
+
+Este bloque subió `RL_STATE_VERSION` de **2 a 3**. `SHM_VERSION` en
+`gymnasium_env/envs/sm64_connection.py` y `SHM_FMT` se actualizaron **en el mismo
+commit**: si no, `SM64Connection` aborta el arranque con el mensaje
+"Recompila el juego…" (la comprobación de `head['version']` del §9.6), que es
+precisamente el comportamiento deseado frente a un binario viejo.
+
+### 10.10 Pendiente
+
+- El `observation_space` del entorno Gymnasium **no** incluye todavía los enemigos
+  (decisión explícita: va en otro commit).
+- `action` se publica como `oAction` crudo. Su significado depende del behavior
+  (`GOOMBA_ACT_*`, `KOOPA_ACT_*`, `CHAIN_CHOMP_ACT_*`… en
+  `include/object_constants.h`); no hay normalización entre tipos.
+- No se expone `oHealth` / "muerto vs vivo" más allá de `active`, ni la velocidad del
+  enemigo.
 

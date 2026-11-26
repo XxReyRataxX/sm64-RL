@@ -257,6 +257,7 @@ Scripts disponibles en `.claude/scripts/`:
 | 2026-11-03 | Añadido arg `--star` + global `gAutoStartActNum` (→ `gCurrActNum`) | `src/pc/pc_main.c`, `src/menu/title_screen.c` |
 | 2026-11-25 | Documentado el subsistema `rl_state` (bridge C↔Python) → §9 | `src/pc/rl_state.c/.h`, `src/pc/pc_main.c`, `src/pc/controller/controller_rl.c`, `src/pc/controller/controller_entry_point.c` |
 | 2026-11-25 | Corregido clamp de `--speed` en §2 (era 1.0–5.0, el real es 1.0–100.0) + anotado el límite de 5.0× del slider de la UI y el throughput medido | doc only (`pc_main.c:276`, `LevelSelector.java:298`) |
+| 2026-11-26 | Sistema de enemigos en la shm: `struct RLEnemy` + 16 slots ordenados por distancia, `RL_STATE_VERSION 2→3`, `SHM_FMT` actualizado → ver §10 en `sm64-c-expert-rl-state.md` | `src/pc/rl_state.h`, `src/pc/rl_state.c`, `gymnasium_env/envs/sm64_connection.py` |
 | 2026-11-25 | Eliminado el modo Manual de la UI: §2 reescrita (Java ya no lanza el binario, lanza el runner de Python; velocidad por Spinner 1–100; `GameLauncher.launch`/`showError` borrados) | doc only (`LevelSelector.java`, `GameLauncher.java`) |
 
 ---
